@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QStackedWidget,
     QGraphicsOpacityEffect,
+    QFileDialog,
 )
 
 try:
@@ -33,7 +34,7 @@ except Exception:
     winreg = None
 
 APP_NAME = "Webhook-Uploader"
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.9.1"
 BASE_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / APP_NAME
 CFG_DIR = BASE_DIR / "cfg"
 LOG_DIR = BASE_DIR / "log"
@@ -611,14 +612,25 @@ class WebhookPage(PageBase):
 
 class FolderPage(PageBase):
     def __init__(self, window):
-        super().__init__("Editar pasta monitorada", "Informe o caminho completo da pasta que será monitorada.")
+        super().__init__("Editar pasta monitorada", "Escolha a pasta pelo navegador do Windows para evitar digitar o caminho manualmente.")
         self.window = window
         self.body.addSpacing(8)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+
         self.input = QLineEdit()
-        self.input.setPlaceholderText(r"C:\Users\SeuNome\Desktop")
+        self.input.setPlaceholderText(r"Nenhuma pasta selecionada")
         self.input.setMinimumHeight(42)
+        self.input.setReadOnly(True)
         self.input.setStyleSheet(self.window.input_style())
-        self.body.addWidget(self.input)
+        row.addWidget(self.input, 1)
+
+        self.browse_btn = self.window.make_secondary_button("Procurar", self.browse_folder)
+        self.browse_btn.setMinimumHeight(42)
+        row.addWidget(self.browse_btn)
+
+        self.body.addLayout(row)
 
         buttons = QHBoxLayout()
         self.back_btn = self.window.make_secondary_button("← Voltar", self.window.go_home)
@@ -631,17 +643,26 @@ class FolderPage(PageBase):
 
     def refresh(self):
         self.input.setText(config.get("folder", ""))
-        self.input.setFocus()
-        self.input.selectAll()
+
+    def browse_folder(self):
+        current = config.get("folder", "") or str(Path.home())
+        selected = QFileDialog.getExistingDirectory(
+            self.window,
+            "Selecionar pasta monitorada",
+            current,
+            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks,
+        )
+        if selected:
+            self.input.setText(selected)
 
     def save(self):
         text = self.input.text().strip().strip('"')
         if not text:
-            self.window.show_message("error", "Informe uma pasta válida.")
+            self.window.show_message("error", "Selecione uma pasta válida.")
             return
         path = Path(text)
         if not path.exists() or not path.is_dir():
-            self.window.show_message("error", "A pasta informada não existe.")
+            self.window.show_message("error", "A pasta selecionada não existe.")
             return
         config["folder"] = str(path)
         save_config()
