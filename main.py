@@ -12,7 +12,7 @@ from pathlib import Path
 
 from send2trash import send2trash
 from PySide6.QtCore import Qt, Signal, QObject, QEasingCurve, QPropertyAnimation, QTimer
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMenu,
     QSystemTrayIcon,
     QPushButton,
     QStackedWidget,
@@ -36,7 +35,7 @@ except Exception:
     winreg = None
 
 APP_NAME = "Webhook-Uploader"
-APP_VERSION = "1.9.6"
+APP_VERSION = "1.9.7"
 BASE_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / APP_NAME
 CFG_DIR = BASE_DIR / "cfg"
 LOG_DIR = BASE_DIR / "log"
@@ -1082,37 +1081,83 @@ class MainWindow(QWidget):
         super().mouseReleaseEvent(event)
 
 
+class TrayExitBubble(QFrame):
+    def __init__(self, on_exit, parent=None):
+        super().__init__(parent)
+        self.on_exit = on_exit
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setObjectName("TrayExitBubble")
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        card = QFrame()
+        card.setObjectName("TrayExitBubbleCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(10, 10, 10, 10)
+        card_layout.setSpacing(0)
+
+        self.exit_btn = QPushButton("Encerrar")
+        self.exit_btn.setCursor(Qt.PointingHandCursor)
+        self.exit_btn.clicked.connect(self.handle_exit)
+        self.exit_btn.setMinimumSize(106, 34)
+        self.exit_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {CARD};
+                color: white;
+                border: 1px solid {CARD_BORDER};
+                border-radius: 12px;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 6px 14px;
+                text-align: center;
+            }}
+            QPushButton:hover {{
+                background: {HOVER_DARK};
+                border: 1px solid {BLUE};
+            }}
+        """)
+        card_layout.addWidget(self.exit_btn)
+        outer.addWidget(card)
+
+        self.setStyleSheet(f"""
+            #TrayExitBubbleCard {{
+                background: {BG};
+                border: 1px solid {CARD_BORDER};
+                border-radius: 14px;
+            }}
+        """)
+        self.hide()
+
+    def handle_exit(self):
+        self.hide()
+        self.on_exit()
+
+    def show_near_cursor(self):
+        self.adjustSize()
+        pos = QCursor.pos()
+        x = max(0, pos.x() - self.width() + 8)
+        y = max(0, pos.y() - self.height() - 8)
+        self.move(x, y)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def focusOutEvent(self, event):
+        self.hide()
+        super().focusOutEvent(event)
+
+
 class TrayController(QObject):
     def __init__(self, app):
         super().__init__()
         self.app = app
         self.tray = QSystemTrayIcon(create_tray_icon(True), app)
-        self.menu = QMenu()
-
-        self.open_action = QAction("Open")
-        self.send_now_action = QAction("Send Now")
-        self.pause_action = QAction("Pause")
-        self.configs_action = QAction("Settings")
-        self.exit_action = QAction("Exit")
-
-        self.menu.addAction(self.open_action)
-        self.menu.addAction(self.send_now_action)
-        self.menu.addSeparator()
-        self.menu.addAction(self.pause_action)
-        self.menu.addAction(self.configs_action)
-        self.menu.addSeparator()
-        self.menu.addAction(self.exit_action)
-
-        self.tray.setContextMenu(self.menu)
         self.tray.setToolTip(f"{APP_NAME} v{APP_VERSION}")
 
         self.window = MainWindow(self.tray)
-
-        self.open_action.triggered.connect(self.window.show_near_tray)
-        self.send_now_action.triggered.connect(self.start_send_now)
-        self.pause_action.triggered.connect(self.toggle_monitoring)
-        self.configs_action.triggered.connect(self.open_settings)
-        self.exit_action.triggered.connect(self.exit_app)
+        self.exit_bubble = TrayExitBubble(self.exit_app)
         self.tray.activated.connect(self.on_tray_activated)
         signals.status_changed.connect(self.sync_pause_action)
 
@@ -1123,9 +1168,6 @@ class TrayController(QObject):
         thread = threading.Thread(target=send_now_manual, daemon=True)
         thread.start()
 
-    def start_send_now(self):
-        thread = threading.Thread(target=send_now_manual, daemon=True)
-        thread.start()
 
     def toggle_monitoring(self):
         global monitoring
@@ -1137,12 +1179,15 @@ class TrayController(QObject):
         self.window.show_near_tray()
 
     def sync_pause_action(self, active):
-        self.pause_action.setText("Pause" if active else "Resume")
         self.tray.setIcon(create_tray_icon(active))
         self.window.home_page.update_pause_visual()
 
     def on_tray_activated(self, reason):
-        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+        if reason == QSystemTrayIcon.Context:
+            self.exit_bubble.show_near_cursor()
+            return
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick, QSystemTrayIcon.MiddleClick):
+            self.exit_bubble.hide()
             self.window.toggle_visible()
 
     def exit_app(self):
