@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QTextEdit,
     QDialog,
+    QColorDialog,
     )
 
 try:
@@ -39,7 +40,7 @@ except Exception:
     winreg = None
 
 APP_NAME = "Webhook-Uploader"
-APP_VERSION = "2.0.3"
+APP_VERSION = "2.0.4"
 BASE_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / APP_NAME
 CFG_DIR = BASE_DIR / "cfg"
 LOG_DIR = BASE_DIR / "log"
@@ -744,12 +745,9 @@ class EmbedColorDialog(QDialog):
     def __init__(self, initial_hex=DEFAULT_EMBED_COLOR, parent=None):
         super().__init__(parent)
         self.selected_hex = normalize_hex_color(initial_hex)
-        self._hue = 0.0
-        self._sat = 1.0
-        self._val = 1.0
         self.setModal(True)
         self.setWindowTitle('Cor do embed')
-        self.resize(470, 340)
+        self.resize(520, 430)
         self.setStyleSheet(
             f"""
             QDialog {{
@@ -783,6 +781,14 @@ class EmbedColorDialog(QDialog):
             QPushButton:hover {{
                 background: #2b3038;
             }}
+            QColorDialog {{
+                background: {PANEL};
+            }}
+            QColorDialog QWidget {{
+                background: {PANEL};
+                color: {TEXT};
+                font: 600 10px 'Segoe UI';
+            }}
             """
         )
 
@@ -790,13 +796,14 @@ class EmbedColorDialog(QDialog):
         root.setContentsMargins(14, 14, 14, 14)
         root.setSpacing(10)
 
-        self.spectrum = ColorSpectrumBox(parent=self)
-        self.spectrum.colorChanged.connect(self.on_sv_changed)
-        root.addWidget(self.spectrum, 1)
-
-        self.hue_slider = HueSlider(parent=self)
-        self.hue_slider.hueChanged.connect(self.on_hue_changed)
-        root.addWidget(self.hue_slider)
+        self.picker = QColorDialog(QColor(self.selected_hex), self)
+        self.picker.setOption(QColorDialog.DontUseNativeDialog, True)
+        self.picker.setOption(QColorDialog.NoButtons, True)
+        self.picker.setOption(QColorDialog.ShowAlphaChannel, False)
+        self.picker.setCurrentColor(QColor(self.selected_hex))
+        self.picker.currentColorChanged.connect(self.on_picker_color_changed)
+        self.picker.setMinimumHeight(300)
+        root.addWidget(self.picker, 1)
 
         info = QLabel('Hex')
         root.addWidget(info)
@@ -838,51 +845,29 @@ class EmbedColorDialog(QDialog):
         controls.addWidget(self.apply_btn)
 
         root.addLayout(controls)
-        self.set_selected_hex(self.selected_hex)
+        self.update_preview(self.selected_hex)
 
     def update_preview(self, hex_color):
         self.preview.setStyleSheet(
             f'background:{hex_color}; border:2px solid #2f343d; border-radius:14px;'
         )
 
-    def set_selected_hex(self, hex_color):
-        hex_color = normalize_hex_color(hex_color)
-        self.selected_hex = hex_color
-        qcolor = QColor(hex_color)
-        h, s, v, _ = qcolor.getHsvF()
-        if h < 0:
-            h = 0.0
-        self._hue = h
-        self._sat = s
-        self._val = v
-        self.spectrum.set_hsv(self._hue, self._sat, self._val)
-        self.hue_slider.set_hue(self._hue)
-        self.hex_input.setText(hex_color)
-        self.update_preview(hex_color)
-
-    def update_from_components(self):
-        r, g, b = colorsys.hsv_to_rgb(self._hue, self._sat, self._val)
-        hex_color = QColor(int(r * 255), int(g * 255), int(b * 255)).name().upper()
-        self.selected_hex = hex_color
-        self.hex_input.setText(hex_color)
-        self.update_preview(hex_color)
-
-    def on_hue_changed(self, hue):
-        self._hue = hue
-        self.spectrum.set_hue(hue)
-        self.update_from_components()
-
-    def on_sv_changed(self, sat, val):
-        self._sat = sat
-        self._val = val
-        self.update_from_components()
+    def on_picker_color_changed(self, color):
+        if not color.isValid():
+            return
+        self.selected_hex = color.name().upper()
+        self.hex_input.setText(self.selected_hex)
+        self.update_preview(self.selected_hex)
 
     def apply_hex_input(self):
         parsed = parse_hex_color(self.hex_input.text())
         if not parsed:
             self.hex_input.setText(self.selected_hex)
             return
-        self.set_selected_hex(parsed)
+        self.selected_hex = parsed
+        self.picker.setCurrentColor(QColor(parsed))
+        self.hex_input.setText(parsed)
+        self.update_preview(parsed)
 
     def accept_current(self):
         self.apply_hex_input()
@@ -1206,6 +1191,10 @@ class PostTemplatePage(PageBase):
             config["embed_color"] = normalize_hex_color(dialog.selected_hex)
             save_config()
             self.color_btn.set_color(config["embed_color"])
+
+    def test_webhook(self):
+        ok, msg = send_test_message()
+        self.window.show_message("success" if ok else "error", msg)
 
     def save_template(self, show_feedback=False):
         text = self.editor.toPlainText().replace("\r\n", "\n")
