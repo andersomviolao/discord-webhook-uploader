@@ -36,7 +36,7 @@ except Exception:
     winreg = None
 
 APP_NAME = "Webhook-Uploader"
-APP_VERSION = "1.9.3"
+APP_VERSION = "1.9.4"
 BASE_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / APP_NAME
 CFG_DIR = BASE_DIR / "cfg"
 LOG_DIR = BASE_DIR / "log"
@@ -489,40 +489,37 @@ class HomePage(PageBase):
         super().__init__(f"Webhook Uploader v{APP_VERSION}", "Monitoramento simples, visual refinado e tudo dentro da mesma interface.")
         self.window = window
 
-        self.body.addSpacing(2)
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.addStretch(1)
+        self.cfg_btn = HoverButton("⚙", size=24, tooltip="Configurações", bg="transparent", hover="#1d2025", fg="#6f7580", font_size=10)
+        self.cfg_btn.clicked.connect(self.window.open_settings_page)
+        top_row.addWidget(self.cfg_btn, 0, Qt.AlignTop)
+        self.body.addLayout(top_row)
+
         self.body.addWidget(self.make_label("Webhook"))
-        row1 = QHBoxLayout()
-        row1.setSpacing(10)
-        self.webhook_edit = self.make_field("Cole o webhook do Discord")
-        row1.addWidget(self.webhook_edit, 1)
-        self.webhook_btn = self.make_round_button("✎", "Editar webhook", self.window.open_webhook_page)
-        row1.addWidget(self.webhook_btn)
-        self.body.addLayout(row1)
+        self.webhook_card = self.make_edit_card("Cole o webhook do Discord", "Editar", self.window.open_webhook_page)
+        self.webhook_edit = self.webhook_card["field"]
+        self.body.addWidget(self.webhook_card["card"])
 
         self.body.addWidget(self.make_label("Watched Folder"))
-        row2 = QHBoxLayout()
-        row2.setSpacing(10)
-        self.folder_edit = self.make_field("Selecione a pasta monitorada")
-        row2.addWidget(self.folder_edit, 1)
-        self.folder_btn = self.make_round_button("⋯", "Editar pasta monitorada", self.window.open_folder_page)
-        row2.addWidget(self.folder_btn)
-        self.body.addLayout(row2)
+        self.folder_card = self.make_edit_card("Selecione a pasta monitorada", "Editar", self.window.open_folder_page)
+        self.folder_edit = self.folder_card["field"]
+        self.body.addWidget(self.folder_card["card"])
+
         self.body.addStretch(1)
 
         bottom = QHBoxLayout()
+        bottom.setContentsMargins(0, 0, 0, 0)
         bottom.addStretch(1)
         bottom.setSpacing(8)
 
-        self.pause_btn = HoverButton("❚❚", size=34, tooltip="Pausar", bg="transparent", hover="#2c2210", fg=YELLOW, font_size=14)
-        self.pause_btn.clicked.connect(self.window.toggle_monitoring)
+        self.pause_btn = self.window.make_secondary_button("Rodando", self.window.toggle_monitoring)
+        self.pause_btn.setMinimumWidth(92)
         bottom.addWidget(self.pause_btn)
 
-        self.cfg_btn = HoverButton("⚙", size=34, tooltip="Configurações", bg="transparent", hover="#232323", fg=ICON_GRAY, font_size=14)
-        self.cfg_btn.clicked.connect(self.window.open_settings_page)
-        bottom.addWidget(self.cfg_btn)
-
-        self.close_btn = HoverButton("✕", size=34, tooltip="Fechar aplicativo", bg="#2c2e34", hover="#41444c", fg="#dddddd", font_size=13)
-        self.close_btn.clicked.connect(self.window.exit_app)
+        self.close_btn = self.window.make_secondary_button("Esconder", self.window.hide_to_tray)
+        self.close_btn.setMinimumWidth(92)
         bottom.addWidget(self.close_btn)
 
         self.body.addLayout(bottom)
@@ -536,15 +533,14 @@ class HomePage(PageBase):
         edit = QLineEdit()
         edit.setReadOnly(True)
         edit.setPlaceholderText(placeholder)
-        edit.setMinimumHeight(36)
+        edit.setMinimumHeight(34)
         edit.setStyleSheet(
             f"""
             QLineEdit {{
-                background: {FIELD_BG};
+                background: transparent;
                 color: {FIELD_TEXT};
-                border: 1px solid #2a2d34;
-                border-radius: 16px;
-                padding: 0 12px;
+                border: none;
+                padding: 0;
                 font: 600 12px 'Segoe UI';
             }}
             QLineEdit::placeholder {{ color: #6f7580; }}
@@ -552,10 +548,29 @@ class HomePage(PageBase):
         )
         return edit
 
-    def make_round_button(self, text, tooltip, handler):
-        btn = HoverButton(text, size=34, tooltip=tooltip, bg=BLUE, hover="#6eb3ff", fg="#ffffff", font_size=14)
-        btn.clicked.connect(handler)
-        return btn
+    def make_edit_card(self, placeholder, button_text, handler):
+        card = QFrame()
+        card.setStyleSheet(
+            f"""
+            QFrame {{
+                background: {CARD};
+                border: 1px solid {CARD_BORDER};
+                border-radius: 16px;
+            }}
+            """
+        )
+        row = QHBoxLayout(card)
+        row.setContentsMargins(14, 10, 10, 10)
+        row.setSpacing(10)
+
+        field = self.make_field(placeholder)
+        row.addWidget(field, 1)
+
+        button = self.window.make_small_button(button_text, handler)
+        button.setMinimumWidth(70)
+        row.addWidget(button)
+
+        return {"card": card, "field": field, "button": button}
 
     def refresh(self):
         self.webhook_edit.setText(config.get("webhook", ""))
@@ -564,16 +579,13 @@ class HomePage(PageBase):
 
     def update_pause_visual(self):
         if monitoring:
-            self.pause_btn.setText("❚❚")
-            self.pause_btn._fg = YELLOW
-            self.pause_btn._hover = "#2c2210"
+            self.pause_btn.setText("Rodando")
+            self.pause_btn.setStyleSheet(self.window.small_button_style(enabled=True, accent=BLUE))
             self.pause_btn.setToolTip("Pausar")
         else:
-            self.pause_btn.setText("▶")
-            self.pause_btn._fg = YELLOW
-            self.pause_btn._hover = "#2c2210"
-            self.pause_btn.setToolTip("Continuar")
-        self.pause_btn.apply_style(False)
+            self.pause_btn.setText("Pausado")
+            self.pause_btn.setStyleSheet(self.window.small_button_style(enabled=True, accent=YELLOW, hover="#ffca52", text_color="#1e1a10"))
+            self.pause_btn.setToolTip("Retomar")
 
 
 class WebhookPage(PageBase):
@@ -768,7 +780,7 @@ class SettingsPage(PageBase):
         self.version_value.setText(APP_VERSION)
         has_webhook = bool((config.get("webhook") or "").strip())
         self.test_btn.setEnabled(has_webhook)
-        self.test_btn.setStyleSheet(self.window.small_button_style(enabled=has_webhook))
+        self.test_btn.setStyleSheet(self.window.small_button_style(enabled=has_webhook, accent=BLUE))
 
     def toggle_startup(self):
         enabled = self.start_toggle.isChecked()
@@ -900,10 +912,21 @@ class MainWindow(QWidget):
         )
         return btn
 
-    def small_button_style(self, enabled=True):
-        bg = BLUE if enabled else "#2d3138"
-        fg = "#ffffff" if enabled else "#6e7480"
-        hover = "#69adff" if enabled else "#2d3138"
+    def small_button_style(self, enabled=True, accent=BLUE, hover=None, text_color=None):
+        if enabled:
+            bg = accent
+            fg = text_color or "#ffffff"
+            if hover is None:
+                if accent == BLUE:
+                    hover = "#69adff"
+                elif accent == YELLOW:
+                    hover = "#ffca52"
+                else:
+                    hover = accent
+        else:
+            bg = "#2d3138"
+            fg = "#6e7480"
+            hover = "#2d3138"
         return f"""
         QPushButton {{
             background: {bg};
@@ -916,11 +939,11 @@ class MainWindow(QWidget):
         QPushButton:hover {{ background: {hover}; }}
         """
 
-    def make_small_button(self, text, handler):
+    def make_small_button(self, text, handler, accent=BLUE):
         btn = QPushButton(text)
         btn.setCursor(Qt.PointingHandCursor)
         btn.clicked.connect(handler)
-        btn.setStyleSheet(self.small_button_style(True))
+        btn.setStyleSheet(self.small_button_style(True, accent=accent))
         return btn
 
     def make_info_value(self):
@@ -988,6 +1011,10 @@ class MainWindow(QWidget):
             self.hide()
         else:
             self.show_near_tray()
+
+    def hide_to_tray(self):
+        self.hide()
+        self.clear_message()
 
     def show_near_tray(self):
         self.refresh_all()
