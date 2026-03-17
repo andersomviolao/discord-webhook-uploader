@@ -5,19 +5,24 @@ import threading
 import requests
 import shutil
 import hashlib
+import datetime
+import queue
 from pathlib import Path
 from send2trash import send2trash
-from tkinter import Tk, simpledialog, filedialog, messagebox
+from tkinter import Tk, simpledialog, filedialog
 from PIL import Image, ImageDraw
 import pystray
 
-# CONFIG
+# CONFIGURAÇÕES BÁSICAS
 APP_NAME = "Webhook_Uploader"
 CONFIG_DIR = Path(os.getenv("LOCALAPPDATA")) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
 LOG_FILE = CONFIG_DIR / "enviados_log.json"
+DIAS_SEMANA = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
 
+# CONTROLE GLOBAL
 file_lock = threading.Lock()
+gui_queue = queue.Queue()
 monitorando = True
 
 def carregar_json(caminho, default):
@@ -26,7 +31,8 @@ def carregar_json(caminho, default):
         try:
             with open(caminho, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except:
+        except Exception as e:
+            print(f"Erro ao carregar JSON {caminho.name}: {e}")
             return default
 
 def salvar_json(caminho, data):
@@ -36,168 +42,168 @@ def salvar_json(caminho, data):
             with open(caminho, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4)
         except Exception as e:
-            print(f"Erro salvar JSON: {e}")
+            print(f"Erro ao salvar JSON {caminho.name}: {e}")
 
 config = carregar_json(CONFIG_FILE, {"pasta": "", "webhook": ""})
 historico_enviados = carregar_json(LOG_FILE, [])
 
+# UTILITÁRIOS
 def get_file_hash(caminho):
     h = hashlib.sha256()
-    with open(caminho, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    try:
+        with open(caminho, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception as e:
+        print(f"Erro ao gerar hash: {e}")
+        return None
 
-# INTERFACE
-def pedir_config_gui():
-    root = Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    root.lift()
-    root.focus_force()
-
-    if not config.get("pasta") or not os.path.isdir(config["pasta"]):
-        nova_pasta = filedialog.askdirectory(title="Selecione a pasta", parent=root)
-        if nova_pasta:
-            config["pasta"] = nova_pasta
-            salvar_json(CONFIG_FILE, config)
-
-    if not config.get("webhook") or "discord.com/api/webhooks/" not in config["webhook"]:
-        novo = simpledialog.askstring("Webhook", "Cole URL Discord:", parent=root)
-        if novo and "discord.com/api/webhooks/" in novo:
-            config["webhook"] = novo.strip()
-            salvar_json(CONFIG_FILE, config)
-        elif novo:
-            messagebox.showwarning("Aviso", "URL inválida.", parent=root)
-    root.destroy()
-
-def trocar_pasta():
-    root = Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    root.lift()
-    root.focus_force()
-    nova_pasta = filedialog.askdirectory(title="Nova Pasta Monitorada", parent=root)
-    if nova_pasta and os.path.isdir(nova_pasta):
-        config["pasta"] = nova_pasta
-        salvar_json(CONFIG_FILE, config)
-    root.destroy()
-
-def trocar_webhook():
-    root = Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    root.lift()
-    root.focus_force()
-    novo_webhook = simpledialog.askstring("Novo Webhook", "Cole o URL do webhook:", parent=root)
-    if novo_webhook and "discord.com/api/webhooks/" in novo_webhook:
-        config["webhook"] = novo_webhook.strip()
-        salvar_json(CONFIG_FILE, config)
-    elif novo_webhook:
-        messagebox.showwarning("Aviso", "URL inválida.", parent=root)
-    root.destroy()
-
-# ARQUIVO LIVRE
 def arquivo_esta_livre(caminho):
     try:
         for _ in range(5):
             size1 = os.path.getsize(caminho)
             time.sleep(1.5)
             size2 = os.path.getsize(caminho)
-            if size1 != size2: return False
-        with open(caminho, 'rb+'): return True
-    except Exception: return False
+            if size1 == size2:
+                with open(caminho, 'rb+'): return True
+        return False
+    except Exception:
+        return False
 
-# ENVIO
+# INTERFACE (Sempre chamadas pela Thread Principal via Fila)
+def abrir_gui_config():
+    root = Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    
+    if not config.get("pasta") or not os.path.isdir(config["pasta"]):
+        nova_pasta = filedialog.askdirectory(title="Selecione a pasta para monitorar", parent=root)
+        if nova_pasta:
+            config["pasta"] = nova_pasta
+            salvar_json(CONFIG_FILE, config)
+
+    if not config.get("webhook") or "discord.com/api/webhooks/" not in config["webhook"]:
+        novo = simpledialog.askstring("Webhook", "Cole o URL do Webhook do Discord:", parent=root)
+        if novo and "discord.com/api/webhooks/" in novo:
+            config["webhook"] = novo.strip()
+            salvar_json(CONFIG_FILE, config)
+    root.destroy()
+
+def trocar_pasta_gui():
+    root = Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    nova = filedialog.askdirectory(title="Nova Pasta Monitorada", parent=root)
+    if nova and os.path.isdir(nova):
+        config["pasta"] = nova
+        salvar_json(CONFIG_FILE, config)
+    root.destroy()
+
+def trocar_webhook_gui():
+    root = Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    novo = simpledialog.askstring("Novo Webhook", "Cole o novo URL do webhook:", parent=root)
+    if novo and "discord.com/api/webhooks/" in novo:
+        config["webhook"] = novo.strip()
+        salvar_json(CONFIG_FILE, config)
+    root.destroy()
+
+def limpar_cache():
+    global historico_enviados
+    with file_lock:
+        historico_enviados.clear()
+    salvar_json(LOG_FILE, historico_enviados)
+
+# LÓGICA DE ENVIO
 def enviar_arquivo(caminho):
     if not config.get("webhook"): return False
     nome_arquivo = os.path.basename(caminho)
+    error_dir = Path(config["pasta"]) / "ERROR"
 
     try:
-        file_hash = get_file_hash(caminho)
-        if any(item.get('hash') == file_hash for item in historico_enviados):
-            print(f"Ignorado (duplicata): {nome_arquivo}")
+        if os.path.getsize(caminho) / (1024 * 1024) > 25:
+            error_dir.mkdir(exist_ok=True)
+            shutil.move(caminho, error_dir / nome_arquivo)
             return False
-    except:
-        return False
+    except Exception: return False
 
-    if not arquivo_esta_livre(caminho):
-        return False
+    file_hash = get_file_hash(caminho)
+    if not file_hash: return False
+
+    with file_lock:
+        if any(item.get('hash') == file_hash for item in historico_enviados):
+            return False
+
+    if not arquivo_esta_livre(caminho): return False
 
     try:
         stat = os.stat(caminho)
-        data_envio = time.strftime("%d/%m/%Y %H:%M:%S")
-        data_criacao = time.strftime("%d/%m/%Y %H:%M:%S", time.localtime(stat.st_ctime))
-        ext = os.path.splitext(caminho)[1].lower()
-
-        mensagem = f"🆕\n\n📤 **Novo Upload** 📤\n\n📅 Envio: {data_envio}\n\n🕒 Criação: {data_criacao}\n\n📄 Tipo: {ext}\n\n📂 Arquivo: {nome_arquivo}\n\n---"
+        agora_dt = datetime.datetime.now()
+        criacao_dt = datetime.datetime.fromtimestamp(stat.st_ctime)
+        
+        data_criacao_str = f"{DIAS_SEMANA[criacao_dt.weekday()]}, {criacao_dt.strftime('%d/%m/%y %H:%M:%S')}"
+        data_upload_str = f"{DIAS_SEMANA[agora_dt.weekday()]}, {agora_dt.strftime('%d/%m/%y %H:%M:%S')}"
+        mensagem = f"🆕\n📄 {nome_arquivo}\n📅 Criado: {data_criacao_str}\n🆙 Upload: {data_upload_str}\n___"
 
         for tentativa in range(4):
             try:
                 with open(caminho, "rb") as f:
-                    res = requests.post(
-                        config["webhook"],
-                        data={"content": mensagem},
-                        files={"file": (nome_arquivo, f)},
-                        timeout=60
-                    )
-
+                    res = requests.post(config["webhook"], data={"content": mensagem}, files={"file": (nome_arquivo, f)}, timeout=60)
+                
                 if res.status_code in [200, 204]:
                     send2trash(os.path.abspath(caminho))
-                    historico_enviados.append({"arquivo": nome_arquivo, "hash": file_hash, "data": data_envio})
-                    if len(historico_enviados) > 2000:
-                        historico_enviados[:] = historico_enviados[-2000:]
+                    with file_lock:
+                        historico_enviados.append({"arquivo": nome_arquivo, "hash": file_hash, "data": data_upload_str})
+                        if len(historico_enviados) > 2000: del historico_enviados[:-2000]
                     salvar_json(LOG_FILE, historico_enviados)
                     return True
-
-                elif res.status_code == 413:
-                    error_dir = Path(config["pasta"]) / "ERROR"
+                elif res.status_code == 429: # Rate Limit
+                    time.sleep(2 ** tentativa)
+                    continue
+                elif res.status_code == 413: # File too large
                     error_dir.mkdir(exist_ok=True)
                     shutil.move(caminho, error_dir / nome_arquivo)
-                    print(f"Movido ERROR: {nome_arquivo}")
                     return False
-
-                elif res.status_code >= 500 or res.status_code in (429, 408):
-                    if tentativa < 3: time.sleep(2 ** tentativa)
-                    continue
-
-                else:
-                    print(f"Erro {nome_arquivo}: {res.status_code}")
-                    return False
-
-            except (requests.exceptions.RequestException, OSError, TimeoutError, ConnectionError) as e:
-                if tentativa == 3:
-                    print(f"Falha final {nome_arquivo}: {e}")
-                    return False
+                break
+            except Exception:
                 time.sleep(2 ** tentativa)
         return False
+    except Exception: return False
 
+def enviar_agora():
+    if not monitorando: return
+    try:
+        arquivos = [os.path.join(config["pasta"], f) for f in os.listdir(config["pasta"]) if os.path.isfile(os.path.join(config["pasta"], f))]
+        for arquivo in sorted(arquivos, key=os.path.getctime):
+            if not monitorando: break
+            if enviar_arquivo(arquivo):
+                time.sleep(10) # Intervalo de 10s entre arquivos no envio manual
     except Exception as e:
-        print(f"Erro {nome_arquivo}: {e}")
-        return False
+        print(f"Erro no envio manual: {e}")
 
-# MONITOR
 def loop_monitoramento():
-    global monitorando
     while True:
-        if monitorando and config.get("pasta") and config.get("webhook"):
-            if os.path.isdir(config["pasta"]):
-                try:
-                    arquivos = [os.path.join(config["pasta"], f) for f in os.listdir(config["pasta"]) if os.path.isfile(os.path.join(config["pasta"], f))]
-                    agora = time.time()
-                    arquivos = [p for p in arquivos if agora - os.path.getctime(p) >= 3600]
-                    arquivos.sort(key=os.path.getctime)
-                    for arquivo in arquivos:
-                        if not monitorando: break
-                        if enviar_arquivo(arquivo):
-                            time.sleep(2)
-                except Exception as e:
-                    print(f"Erro diretório: {e}")
-        for _ in range(60):
+        if monitorando and config.get("pasta") and config.get("webhook") and os.path.isdir(config["pasta"]):
+            try:
+                agora = time.time()
+                arquivos = [os.path.join(config["pasta"], f) for f in os.listdir(config["pasta"]) if os.path.isfile(os.path.join(config["pasta"], f))]
+                # Mantido o delay de 1 hora (3600s) para arquivos novos
+                arquivos_prontos = [p for p in arquivos if agora - os.path.getctime(p) >= 3600]
+                
+                for arquivo in sorted(arquivos_prontos, key=os.path.getctime):
+                    if not monitorando: break
+                    if enviar_arquivo(arquivo):
+                        time.sleep(10) # Intervalo de 10s entre arquivos no automático
+            except Exception: pass
+        
+        # Espera 5 minutos (300 segundos) para a próxima varredura
+        for _ in range(300):
             if not monitorando: break
             time.sleep(1)
 
-# TRAY
+# SISTEMA TRAY
 def criar_imagem(ativo):
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -213,22 +219,39 @@ def acao_pausar(icon):
 
 def acao_sair(icon):
     icon.stop()
-    os._exit(0)
+    gui_queue.put("sair")
 
-# MAIN
 if __name__ == "__main__":
+    # Inicia monitoramento
     threading.Thread(target=loop_monitoramento, daemon=True).start()
     
+    # Configuração Inicial
     if not config.get("pasta") or not config.get("webhook"):
-        pedir_config_gui()
+        gui_queue.put("pedir_config")
 
+    # Menu do Ícone
     menu = pystray.Menu(
         pystray.MenuItem("Pausar / Retomar", acao_pausar),
-        pystray.MenuItem("Trocar Pasta", lambda: threading.Thread(target=trocar_pasta, daemon=True).start()),
-        pystray.MenuItem("Trocar Webhook", lambda: threading.Thread(target=trocar_webhook, daemon=True).start()),
+        pystray.MenuItem("Enviar Agora", lambda: threading.Thread(target=enviar_agora, daemon=True).start()),
+        pystray.MenuItem("Limpar Cache", lambda: threading.Thread(target=limpar_cache, daemon=True).start()),
+        pystray.MenuItem("Trocar Pasta", lambda: gui_queue.put("trocar_pasta")),
+        pystray.MenuItem("Trocar Webhook", lambda: gui_queue.put("trocar_webhook")),
         pystray.MenuItem("Abrir Pasta Config", lambda: os.startfile(CONFIG_DIR)),
         pystray.MenuItem("Sair", acao_sair)
     )
    
     icon = pystray.Icon(APP_NAME, criar_imagem(True), "Webhook Uploader", menu)
-    icon.run()
+    icon.run_detached()
+
+    # LOOP DA THREAD PRINCIPAL: Processa pedidos de interface sem travar
+    while True:
+        try:
+            tarefa = gui_queue.get(timeout=1)
+            if tarefa == "pedir_config": abrir_gui_config()
+            elif tarefa == "trocar_pasta": trocar_pasta_gui()
+            elif tarefa == "trocar_webhook": trocar_webhook_gui()
+            elif tarefa == "sair": break
+        except queue.Empty:
+            continue
+
+    os._exit(0)
