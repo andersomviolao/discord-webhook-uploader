@@ -3,6 +3,7 @@ import os
 import json
 import time
 import math
+import colorsys
 import threading
 import requests
 import shutil
@@ -13,7 +14,7 @@ from pathlib import Path
 
 from send2trash import send2trash
 from PySide6.QtCore import Qt, Signal, QObject, QEasingCurve, QPropertyAnimation, QTimer
-from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QBrush
+from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QBrush, QLinearGradient
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -30,8 +31,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QTextEdit,
     QDialog,
-    QColorDialog,
-)
+    )
 
 try:
     import winreg
@@ -39,7 +39,7 @@ except Exception:
     winreg = None
 
 APP_NAME = "Webhook-Uploader"
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.0.3"
 BASE_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / APP_NAME
 CFG_DIR = BASE_DIR / "cfg"
 LOG_DIR = BASE_DIR / "log"
@@ -601,13 +601,155 @@ class ColorSwatchButton(QPushButton):
         super().leaveEvent(event)
 
 
+class ColorSpectrumBox(QWidget):
+    colorChanged = Signal(float, float)
+
+    def __init__(self, hue=0.0, sat=1.0, val=1.0, parent=None):
+        super().__init__(parent)
+        self._hue = max(0.0, min(1.0, hue))
+        self._sat = max(0.0, min(1.0, sat))
+        self._val = max(0.0, min(1.0, val))
+        self.setMinimumSize(250, 180)
+        self.setCursor(Qt.CrossCursor)
+
+    def set_hsv(self, hue, sat, val):
+        self._hue = max(0.0, min(1.0, hue))
+        self._sat = max(0.0, min(1.0, sat))
+        self._val = max(0.0, min(1.0, val))
+        self.update()
+
+    def set_hue(self, hue):
+        self._hue = max(0.0, min(1.0, hue))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 16, 16)
+        painter.setClipPath(path)
+
+        hue_color = QColor.fromHsvF(self._hue, 1.0, 1.0)
+        painter.fillRect(rect, hue_color)
+
+        white_grad = QLinearGradient(rect.topLeft(), rect.topRight())
+        white_grad.setColorAt(0.0, QColor(255, 255, 255, 255))
+        white_grad.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.fillRect(rect, white_grad)
+
+        black_grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+        black_grad.setColorAt(0.0, QColor(0, 0, 0, 0))
+        black_grad.setColorAt(1.0, QColor(0, 0, 0, 255))
+        painter.fillRect(rect, black_grad)
+
+        painter.setClipping(False)
+        pen = QPen(QColor('#2f343d'))
+        pen.setWidth(1)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
+
+        px = rect.left() + self._sat * rect.width()
+        py = rect.top() + (1.0 - self._val) * rect.height()
+        painter.setPen(QPen(QColor('#ffffff'), 2))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(int(px) - 6, int(py) - 6, 12, 12)
+        painter.end()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._update_from_pos(event.position())
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            self._update_from_pos(event.position())
+        super().mouseMoveEvent(event)
+
+    def _update_from_pos(self, pos):
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+        x = max(rect.left(), min(rect.right(), pos.x()))
+        y = max(rect.top(), min(rect.bottom(), pos.y()))
+        self._sat = (x - rect.left()) / max(1, rect.width())
+        self._val = 1.0 - ((y - rect.top()) / max(1, rect.height()))
+        self.update()
+        self.colorChanged.emit(self._sat, self._val)
+
+
+class HueSlider(QWidget):
+    hueChanged = Signal(float)
+
+    def __init__(self, hue=0.0, parent=None):
+        super().__init__(parent)
+        self._hue = max(0.0, min(1.0, hue))
+        self.setFixedHeight(18)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def set_hue(self, hue):
+        self._hue = max(0.0, min(1.0, hue))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 9, 9)
+        grad = QLinearGradient(rect.topLeft(), rect.topRight())
+        stops = [
+            (0.0, '#ff0000'),
+            (1/6, '#ffff00'),
+            (2/6, '#00ff00'),
+            (3/6, '#00ffff'),
+            (4/6, '#0000ff'),
+            (5/6, '#ff00ff'),
+            (1.0, '#ff0000'),
+        ]
+        for pos, color in stops:
+            grad.setColorAt(pos, QColor(color))
+        painter.fillPath(path, grad)
+        painter.setPen(QPen(QColor('#2f343d'), 1))
+        painter.drawPath(path)
+
+        x = rect.left() + self._hue * rect.width()
+        painter.setPen(QPen(QColor('#ffffff'), 2))
+        painter.setBrush(QColor(15, 16, 18))
+        painter.drawEllipse(int(x) - 6, rect.center().y() - 6, 12, 12)
+        painter.end()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._update_from_pos(event.position().x())
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            self._update_from_pos(event.position().x())
+        super().mouseMoveEvent(event)
+
+    def _update_from_pos(self, x):
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        if rect.width() <= 0:
+            return
+        x = max(rect.left(), min(rect.right(), x))
+        self._hue = (x - rect.left()) / max(1, rect.width())
+        self.update()
+        self.hueChanged.emit(self._hue)
+
+
 class EmbedColorDialog(QDialog):
     def __init__(self, initial_hex=DEFAULT_EMBED_COLOR, parent=None):
         super().__init__(parent)
         self.selected_hex = normalize_hex_color(initial_hex)
+        self._hue = 0.0
+        self._sat = 1.0
+        self._val = 1.0
         self.setModal(True)
-        self.setWindowTitle("Cor do embed")
-        self.resize(460, 430)
+        self.setWindowTitle('Cor do embed')
+        self.resize(470, 340)
         self.setStyleSheet(
             f"""
             QDialog {{
@@ -641,35 +783,22 @@ class EmbedColorDialog(QDialog):
             QPushButton:hover {{
                 background: #2b3038;
             }}
-            QColorDialog {{
-                background: {PANEL};
-            }}
-            QColorDialog QPushButton {{
-                min-height: 26px;
-            }}
-            QColorDialog QSpinBox, QColorDialog QLineEdit, QColorDialog QComboBox {{
-                background: {FIELD_BG};
-                color: {FIELD_TEXT};
-                border: 1px solid #2c3038;
-                border-radius: 8px;
-                min-height: 24px;
-                padding: 0 6px;
-            }}
             """
         )
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
+        root.setContentsMargins(14, 14, 14, 14)
         root.setSpacing(10)
 
-        self.picker = QColorDialog(self)
-        self.picker.setOption(QColorDialog.DontUseNativeDialog, True)
-        self.picker.setOption(QColorDialog.NoButtons, True)
-        self.picker.setCurrentColor(QColor(self.selected_hex))
-        self.picker.currentColorChanged.connect(self.on_color_changed)
-        root.addWidget(self.picker, 1)
+        self.spectrum = ColorSpectrumBox(parent=self)
+        self.spectrum.colorChanged.connect(self.on_sv_changed)
+        root.addWidget(self.spectrum, 1)
 
-        info = QLabel("Hex")
+        self.hue_slider = HueSlider(parent=self)
+        self.hue_slider.hueChanged.connect(self.on_hue_changed)
+        root.addWidget(self.hue_slider)
+
+        info = QLabel('Hex')
         root.addWidget(info)
 
         controls = QHBoxLayout()
@@ -685,11 +814,11 @@ class EmbedColorDialog(QDialog):
         self.hex_input.editingFinished.connect(self.apply_hex_input)
         controls.addWidget(self.hex_input, 1)
 
-        self.cancel_btn = QPushButton("Cancelar")
+        self.cancel_btn = QPushButton('Cancelar')
         self.cancel_btn.clicked.connect(self.reject)
         controls.addWidget(self.cancel_btn)
 
-        self.apply_btn = QPushButton("Aplicar")
+        self.apply_btn = QPushButton('Aplicar')
         self.apply_btn.setStyleSheet(
             f"""
             QPushButton {{
@@ -709,28 +838,51 @@ class EmbedColorDialog(QDialog):
         controls.addWidget(self.apply_btn)
 
         root.addLayout(controls)
-        self.update_preview(self.selected_hex)
+        self.set_selected_hex(self.selected_hex)
 
     def update_preview(self, hex_color):
         self.preview.setStyleSheet(
-            f"background:{hex_color}; border:2px solid #2f343d; border-radius:14px;"
+            f'background:{hex_color}; border:2px solid #2f343d; border-radius:14px;'
         )
 
-    def on_color_changed(self, color):
-        hex_color = normalize_hex_color(color.name())
+    def set_selected_hex(self, hex_color):
+        hex_color = normalize_hex_color(hex_color)
+        self.selected_hex = hex_color
+        qcolor = QColor(hex_color)
+        h, s, v, _ = qcolor.getHsvF()
+        if h < 0:
+            h = 0.0
+        self._hue = h
+        self._sat = s
+        self._val = v
+        self.spectrum.set_hsv(self._hue, self._sat, self._val)
+        self.hue_slider.set_hue(self._hue)
+        self.hex_input.setText(hex_color)
+        self.update_preview(hex_color)
+
+    def update_from_components(self):
+        r, g, b = colorsys.hsv_to_rgb(self._hue, self._sat, self._val)
+        hex_color = QColor(int(r * 255), int(g * 255), int(b * 255)).name().upper()
         self.selected_hex = hex_color
         self.hex_input.setText(hex_color)
         self.update_preview(hex_color)
+
+    def on_hue_changed(self, hue):
+        self._hue = hue
+        self.spectrum.set_hue(hue)
+        self.update_from_components()
+
+    def on_sv_changed(self, sat, val):
+        self._sat = sat
+        self._val = val
+        self.update_from_components()
 
     def apply_hex_input(self):
         parsed = parse_hex_color(self.hex_input.text())
         if not parsed:
             self.hex_input.setText(self.selected_hex)
             return
-        self.selected_hex = parsed
-        self.hex_input.setText(parsed)
-        self.picker.setCurrentColor(QColor(parsed))
-        self.update_preview(parsed)
+        self.set_selected_hex(parsed)
 
     def accept_current(self):
         self.apply_hex_input()
@@ -1013,6 +1165,9 @@ class PostTemplatePage(PageBase):
 
         self.back_btn = self.window.make_secondary_button("← Voltar", self.back_to_settings)
         buttons.addWidget(self.back_btn)
+
+        self.test_btn = self.window.make_small_button("Testar webhook", self.test_webhook)
+        buttons.addWidget(self.test_btn)
         buttons.addStretch(1)
 
         self.color_btn = ColorSwatchButton(config.get("embed_color", DEFAULT_EMBED_COLOR))
@@ -1033,6 +1188,9 @@ class PostTemplatePage(PageBase):
         self.editor.setPlainText(load_template())
         self.embed_toggle.setChecked(bool(config.get("use_embed", False)))
         self.color_btn.set_color(config.get("embed_color", DEFAULT_EMBED_COLOR))
+        has_webhook = bool((config.get("webhook") or "").strip())
+        self.test_btn.setEnabled(has_webhook)
+        self.test_btn.setStyleSheet(self.window.small_button_style(enabled=has_webhook, accent=BLUE))
         self.editor.setFocus()
         cursor = self.editor.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
@@ -1126,14 +1284,6 @@ class SettingsPage(PageBase):
         self.start_toggle.clicked.connect(self.toggle_startup)
         self.scroll_body.addWidget(SettingRow("Iniciar com Windows", "Abre oculto na bandeja quando o Windows iniciar.", self.start_toggle))
 
-        test_wrap = QWidget()
-        test_wrap.setStyleSheet("background: transparent;")
-        test_layout = QHBoxLayout(test_wrap)
-        test_layout.setContentsMargins(0, 0, 0, 0)
-        self.test_btn = self.window.make_small_button("Testar", self.test_webhook)
-        test_layout.addWidget(self.test_btn)
-        self.scroll_body.addWidget(SettingRow("Testar webhook", "Envia uma mensagem de texto simples para o webhook atual.", test_wrap))
-
         self.delete_toggle = ToggleSwitch(config.get("delete_after_send", True))
         self.delete_toggle.clicked.connect(self.toggle_delete_after_send)
         self.scroll_body.addWidget(SettingRow("Excluir após enviar", "Ligado: move para a lixeira. Desligado: mantém o arquivo e evita duplicidade pelo log.", self.delete_toggle))
@@ -1170,9 +1320,6 @@ class SettingsPage(PageBase):
         self.start_toggle.setChecked(config.get("start_with_windows", False))
         self.delete_toggle.setChecked(config.get("delete_after_send", True))
         self.version_value.setText(APP_VERSION)
-        has_webhook = bool((config.get("webhook") or "").strip())
-        self.test_btn.setEnabled(has_webhook)
-        self.test_btn.setStyleSheet(self.window.small_button_style(enabled=has_webhook, accent=BLUE))
 
     def toggle_startup(self):
         enabled = self.start_toggle.isChecked()
@@ -1189,10 +1336,6 @@ class SettingsPage(PageBase):
         config["delete_after_send"] = self.delete_toggle.isChecked()
         save_config()
         self.window.show_message("success", "Opção de exclusão atualizada.")
-
-    def test_webhook(self):
-        ok, msg = send_test_message()
-        self.window.show_message("success" if ok else "error", msg)
 
     def clear_log(self):
         clear_sent_log()
