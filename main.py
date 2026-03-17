@@ -30,6 +30,7 @@ LOG_DIR = BASE_DIR / "log"
 
 CONFIG_FILE = CFG_DIR / "cfg.json"
 LOG_FILE = LOG_DIR / "log.json"
+TEMPLATE_FILE = CFG_DIR / "post.txt"
 DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 file_lock = threading.Lock()
@@ -53,6 +54,25 @@ def save_json(path, data):
                 json.dump(data, f, indent=4)
         except Exception as e:
             print(f"Error saving file: {e}")
+
+def load_template():
+    with file_lock:
+        CFG_DIR.mkdir(parents=True, exist_ok=True)
+        if not TEMPLATE_FILE.exists():
+            default = """🆕 **File Sent**
+📄 `{filename}`
+📅 Created: {creation_str}
+🆙 Upload: {upload_str}"""
+            TEMPLATE_FILE.write_text(default, encoding="utf-8")
+            return default
+        try:
+            with open(TEMPLATE_FILE, "r", encoding="utf-8") as f:
+                return f.read()
+        except:
+            return """🆕 **File Sent**
+📄 `{filename}`
+📅 Created: {creation_str}
+🆙 Upload: {upload_str}"""
 
 config = load_json(CONFIG_FILE, {"folder": "", "webhook": ""})
 sent_history = load_json(LOG_FILE, [])
@@ -113,7 +133,8 @@ def send_file(path):
         creation_str = f"{DAYS_OF_WEEK[creation_dt.weekday()]}, {creation_dt.strftime('%d/%m/%y %H:%M:%S')}"
         upload_str = f"{DAYS_OF_WEEK[now_dt.weekday()]}, {now_dt.strftime('%d/%m/%y %H:%M:%S')}"
         
-        message = f"🆕 **File Sent**\n📄 `{filename}`\n📅 Created: {creation_str}\n🆙 Upload: {upload_str}"
+        template = load_template()
+        message = template.format(filename=filename, creation_str=creation_str, upload_str=upload_str)
 
         for attempt in range(4):
             try:
@@ -252,6 +273,19 @@ if __name__ == "__main__":
 
     menu_ui = FloatingMenu()
     menu_ui.withdraw()
+
+    # First-run setup
+    if not config.get("folder"):
+        p = filedialog.askdirectory(title="Select folder to monitor")
+        if p:
+            config["folder"] = p
+            save_json(CONFIG_FILE, config)
+    if not config.get("webhook"):
+        dialog = ctk.CTkInputDialog(text="Paste the Discord Webhook:", title="First Run - Webhook Setup", button_fg_color=BLURPLE)
+        w = dialog.get_input()
+        if w and "discord.com" in w:
+            config["webhook"] = w.strip()
+            save_json(CONFIG_FILE, config)
 
     item_invisible = pystray.MenuItem("Open", open_menu_direct, default=True, visible=False)
     menu = pystray.Menu(item_invisible)
