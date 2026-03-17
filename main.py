@@ -36,7 +36,7 @@ except Exception:
     winreg = None
 
 APP_NAME = "Webhook-Uploader"
-APP_VERSION = "1.9.5"
+APP_VERSION = "1.9.6"
 BASE_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / APP_NAME
 CFG_DIR = BASE_DIR / "cfg"
 LOG_DIR = BASE_DIR / "log"
@@ -464,24 +464,72 @@ class PageBase(QWidget):
         super().__init__()
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(12)
+        root.setSpacing(10)
 
         top = QVBoxLayout()
-        top.setSpacing(2)
+        top.setSpacing(1)
 
         self.title = QLabel(title)
-        self.title.setStyleSheet(f"color:{BLUE}; font: 700 20px 'Segoe UI';")
+        self.title.setStyleSheet(f"color:{BLUE}; font: 700 14px 'Segoe UI';")
         top.addWidget(self.title)
 
         self.subtitle = QLabel(subtitle)
         self.subtitle.setWordWrap(True)
-        self.subtitle.setStyleSheet(f"color:{MUTED}; font: 500 12px 'Segoe UI';")
+        self.subtitle.setStyleSheet(f"color:{MUTED}; font: 500 10px 'Segoe UI';")
         top.addWidget(self.subtitle)
 
         root.addLayout(top)
         self.body = QVBoxLayout()
-        self.body.setSpacing(12)
+        self.body.setSpacing(10)
         root.addLayout(self.body, 1)
+
+
+class HomeValueRow(QFrame):
+    def __init__(self, window, title, button_text, handler):
+        super().__init__()
+        self.setStyleSheet(
+            f"""
+            QFrame {{
+                background: {CARD};
+                border: 1px solid {CARD_BORDER};
+                border-radius: 16px;
+            }}
+            QLabel {{
+                background: transparent;
+                border: none;
+            }}
+            """
+        )
+        root = QHBoxLayout(self)
+        root.setContentsMargins(14, 10, 10, 10)
+        root.setSpacing(10)
+
+        left = QVBoxLayout()
+        left.setSpacing(2)
+
+        self.title_label = QLabel(title)
+        self.title_label.setStyleSheet(f"color:{TEXT}; font: 700 11px 'Segoe UI';")
+        left.addWidget(self.title_label)
+
+        self.value_label = QLabel("")
+        self.value_label.setWordWrap(False)
+        self.value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.value_label.setStyleSheet(f"color:{FIELD_TEXT}; font: 500 10px 'Segoe UI'; background: transparent; border: none;")
+        self.value_label.setMinimumHeight(18)
+        left.addWidget(self.value_label)
+
+        root.addLayout(left, 1)
+
+        self.button = window.make_small_button(button_text, handler)
+        self.button.setFixedSize(78, 28)
+        root.addWidget(self.button, 0, Qt.AlignVCenter)
+
+    def set_value(self, text, placeholder):
+        value = (text or '').strip()
+        self.value_label.setText(value if value else placeholder)
+        self.value_label.setStyleSheet(
+            f"color:{FIELD_TEXT if value else '#6f7580'}; font: 500 10px 'Segoe UI'; background: transparent; border: none;"
+        )
 
 
 class HomePage(PageBase):
@@ -489,23 +537,27 @@ class HomePage(PageBase):
         super().__init__(f"Webhook Uploader v{APP_VERSION}", "Monitoramento simples, visual refinado e tudo dentro da mesma interface.")
         self.window = window
 
-        top_row = QHBoxLayout()
-        top_row.setContentsMargins(0, 0, 0, 4)
-        top_row.addStretch(1)
-        self.cfg_btn = HoverButton("⚙", size=22, tooltip="Configurações", bg="transparent", hover="#1d2025", fg="#6f7580", font_size=9)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 2)
+
+        left = QVBoxLayout()
+        left.setSpacing(1)
+        left.addWidget(self.title)
+        left.addWidget(self.subtitle)
+        header.addLayout(left, 1)
+
+        self.cfg_btn = HoverButton("⚙", size=18, tooltip="Configurações", bg="transparent", hover="#1d2025", fg="#6f7580", font_size=8)
         self.cfg_btn.clicked.connect(self.window.open_settings_page)
-        top_row.addWidget(self.cfg_btn, 0, Qt.AlignRight | Qt.AlignTop)
-        self.body.addLayout(top_row)
+        header.addWidget(self.cfg_btn, 0, Qt.AlignTop | Qt.AlignRight)
 
-        self.body.addWidget(self.make_label("Webhook"))
-        self.webhook_card = self.make_edit_card("Cole o webhook do Discord", "Editar", self.window.open_webhook_page)
-        self.webhook_edit = self.webhook_card["field"]
-        self.body.addWidget(self.webhook_card["card"])
+        self.layout().insertLayout(0, header)
+        self.layout().removeItem(self.layout().itemAt(1))
 
-        self.body.addWidget(self.make_label("Watched Folder"))
-        self.folder_card = self.make_edit_card("Selecione a pasta monitorada", "Editar", self.window.open_folder_page)
-        self.folder_edit = self.folder_card["field"]
-        self.body.addWidget(self.folder_card["card"])
+        self.webhook_row = HomeValueRow(self.window, "Webhook", "Editar", self.window.open_webhook_page)
+        self.body.addWidget(self.webhook_row)
+
+        self.folder_row = HomeValueRow(self.window, "Watched Folder", "Editar", self.window.open_folder_page)
+        self.body.addWidget(self.folder_row)
 
         self.body.addStretch(1)
 
@@ -514,67 +566,23 @@ class HomePage(PageBase):
         bottom.addStretch(1)
         bottom.setSpacing(8)
 
-        self.pause_btn = self.window.make_secondary_button("Rodando", self.window.toggle_monitoring)
-        self.pause_btn.setMinimumSize(100, 34)
+        self.pause_btn = self.window.make_small_button("Rodando", self.window.toggle_monitoring, accent=BLUE)
+        self.pause_btn.setFixedSize(102, 30)
         bottom.addWidget(self.pause_btn)
 
+        self.send_now_btn = self.window.make_small_button("Enviar agora", self.window.start_send_now, accent=BLUE)
+        self.send_now_btn.setFixedSize(102, 30)
+        bottom.addWidget(self.send_now_btn)
+
         self.close_btn = self.window.make_secondary_button("Esconder", self.window.hide_to_tray)
-        self.close_btn.setMinimumSize(100, 34)
+        self.close_btn.setFixedSize(102, 30)
         bottom.addWidget(self.close_btn)
 
         self.body.addLayout(bottom)
 
-    def make_label(self, text):
-        label = QLabel(text)
-        label.setStyleSheet(f"color:{TEXT}; font: 600 13px 'Segoe UI';")
-        return label
-
-    def make_field(self, placeholder):
-        edit = QLineEdit()
-        edit.setReadOnly(True)
-        edit.setPlaceholderText(placeholder)
-        edit.setMinimumHeight(34)
-        edit.setStyleSheet(
-            f"""
-            QLineEdit {{
-                background: transparent;
-                color: {FIELD_TEXT};
-                border: none;
-                padding: 0;
-                font: 600 12px 'Segoe UI';
-            }}
-            QLineEdit::placeholder {{ color: #6f7580; }}
-            """
-        )
-        return edit
-
-    def make_edit_card(self, placeholder, button_text, handler):
-        card = QFrame()
-        card.setStyleSheet(
-            f"""
-            QFrame {{
-                background: {CARD};
-                border: 1px solid {CARD_BORDER};
-                border-radius: 16px;
-            }}
-            """
-        )
-        row = QHBoxLayout(card)
-        row.setContentsMargins(14, 10, 10, 10)
-        row.setSpacing(10)
-
-        field = self.make_field(placeholder)
-        row.addWidget(field, 1)
-
-        button = self.window.make_small_button(button_text, handler)
-        button.setFixedSize(82, 30)
-        row.addWidget(button)
-
-        return {"card": card, "field": field, "button": button}
-
     def refresh(self):
-        self.webhook_edit.setText(config.get("webhook", ""))
-        self.folder_edit.setText(config.get("folder", ""))
+        self.webhook_row.set_value(config.get("webhook", ""), "Nenhum webhook configurado")
+        self.folder_row.set_value(config.get("folder", ""), "Nenhuma pasta selecionada")
         self.update_pause_visual()
 
     def update_pause_visual(self):
@@ -595,7 +603,7 @@ class WebhookPage(PageBase):
         self.body.addSpacing(8)
         self.input = QLineEdit()
         self.input.setPlaceholderText("https://discord.com/api/webhooks/...")
-        self.input.setMinimumHeight(42)
+        self.input.setMinimumHeight(38)
         self.input.setStyleSheet(self.window.input_style())
         self.body.addWidget(self.input)
 
@@ -635,13 +643,13 @@ class FolderPage(PageBase):
 
         self.input = QLineEdit()
         self.input.setPlaceholderText(r"Nenhuma pasta selecionada")
-        self.input.setMinimumHeight(42)
+        self.input.setMinimumHeight(38)
         self.input.setReadOnly(True)
         self.input.setStyleSheet(self.window.input_style())
         row.addWidget(self.input, 1)
 
         self.browse_btn = self.window.make_secondary_button("Procurar", self.browse_folder)
-        self.browse_btn.setMinimumHeight(42)
+        self.browse_btn.setMinimumHeight(38)
         row.addWidget(self.browse_btn)
 
         self.body.addLayout(row)
@@ -709,12 +717,12 @@ class SettingRow(QFrame):
         left.setSpacing(2)
 
         t = QLabel(title)
-        t.setStyleSheet(f"color:{TEXT}; font: 700 12px 'Segoe UI';")
+        t.setStyleSheet(f"color:{TEXT}; font: 700 11px 'Segoe UI';")
         left.addWidget(t)
 
         s = QLabel(subtitle)
         s.setWordWrap(True)
-        s.setStyleSheet(f"color:{MUTED}; font: 500 11px 'Segoe UI';")
+        s.setStyleSheet(f"color:{MUTED}; font: 500 10px 'Segoe UI';")
         left.addWidget(s)
 
         root.addLayout(left, 1)
@@ -841,7 +849,7 @@ class MainWindow(QWidget):
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(560, 350)
+        self.setFixedSize(560, 320)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 12, 12, 12)
@@ -850,16 +858,16 @@ class MainWindow(QWidget):
         outer.addWidget(self.panel)
 
         root = QVBoxLayout(self.panel)
-        root.setContentsMargins(22, 18, 18, 14)
+        root.setContentsMargins(16, 14, 16, 12)
         root.setSpacing(10)
 
         self.stack = QStackedWidget()
         root.addWidget(self.stack, 1)
 
         self.message_label = QLabel("")
-        self.message_label.setMinimumHeight(20)
+        self.message_label.setMinimumHeight(16)
         self.message_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.message_label.setStyleSheet(f"color:{MUTED}; font: 600 11px 'Segoe UI';")
+        self.message_label.setStyleSheet(f"color:{MUTED}; font: 600 10px 'Segoe UI';")
         root.addWidget(self.message_label)
 
         self.home_page = HomePage(self)
@@ -889,7 +897,7 @@ class MainWindow(QWidget):
             border: 1px solid #2c3038;
             border-radius: 16px;
             padding: 0 14px;
-            font: 600 12px 'Segoe UI';
+            font: 600 10px 'Segoe UI';
         }}
         QLineEdit:focus {{ border: 1px solid {BLUE}; }}
         QLineEdit::placeholder {{ color: #6f7580; }}
@@ -905,9 +913,9 @@ class MainWindow(QWidget):
                 background: {BLUE};
                 color: white;
                 border: none;
-                border-radius: 14px;
-                padding: 9px 16px;
-                font: 700 12px 'Segoe UI';
+                border-radius: 13px;
+                padding: 7px 14px;
+                font: 700 10px 'Segoe UI';
             }}
             QPushButton:hover {{ background: #69adff; }}
             """
@@ -924,9 +932,9 @@ class MainWindow(QWidget):
                 background: #24272d;
                 color: {TEXT};
                 border: 1px solid #30343d;
-                border-radius: 14px;
-                padding: 9px 14px;
-                font: 700 12px 'Segoe UI';
+                border-radius: 13px;
+                padding: 7px 12px;
+                font: 700 10px 'Segoe UI';
             }}
             QPushButton:hover {{ background: #2b3038; }}
             """
@@ -954,8 +962,8 @@ class MainWindow(QWidget):
             color: {fg};
             border: none;
             border-radius: 12px;
-            padding: 8px 14px;
-            font: 700 11px 'Segoe UI';
+            padding: 7px 12px;
+            font: 700 10px 'Segoe UI';
         }}
         QPushButton:hover {{ background: {hover}; }}
         """
@@ -964,8 +972,8 @@ class MainWindow(QWidget):
         btn = QPushButton(text)
         btn.setCursor(Qt.PointingHandCursor)
         btn.clicked.connect(handler)
-        btn.setMinimumHeight(30)
-        btn.setMinimumWidth(78)
+        btn.setMinimumHeight(28)
+        btn.setMinimumWidth(74)
         btn.setStyleSheet(self.small_button_style(True, accent=accent))
         return btn
 
@@ -973,7 +981,7 @@ class MainWindow(QWidget):
         label = QLabel("")
         label.setWordWrap(True)
         label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        label.setStyleSheet(f"color:{TEXT}; font: 600 11px 'Segoe UI'; background: transparent; border: none;")
+        label.setStyleSheet(f"color:{TEXT}; font: 600 10px 'Segoe UI'; background: transparent; border: none;")
         return label
 
     def refresh_all(self):
@@ -1019,6 +1027,10 @@ class MainWindow(QWidget):
 
     def clear_message(self):
         self.message_label.setText("")
+
+    def start_send_now(self):
+        thread = threading.Thread(target=send_now_manual, daemon=True)
+        thread.start()
 
     def toggle_monitoring(self):
         global monitoring
@@ -1106,6 +1118,10 @@ class TrayController(QObject):
 
         self.sync_pause_action(monitoring)
         self.tray.show()
+
+    def start_send_now(self):
+        thread = threading.Thread(target=send_now_manual, daemon=True)
+        thread.start()
 
     def start_send_now(self):
         thread = threading.Thread(target=send_now_manual, daemon=True)
