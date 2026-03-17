@@ -11,18 +11,8 @@ import traceback
 from pathlib import Path
 
 from send2trash import send2trash
-from PySide6.QtCore import Qt, QTimer, Signal, QObject, QSize, QRect
-from PySide6.QtGui import (
-    QAction,
-    QColor,
-    QCursor,
-    QFont,
-    QIcon,
-    QPainter,
-    QPainterPath,
-    QPen,
-    QPixmap,
-)
+from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -30,16 +20,16 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
     QFileDialog,
     QInputDialog,
     QMenu,
     QMessageBox,
     QSystemTrayIcon,
+    QPushButton,
 )
 
 APP_NAME = "Webhook-Uploader"
-APP_VERSION = "1.8"
+APP_VERSION = "1.8.2"
 BASE_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / APP_NAME
 CFG_DIR = BASE_DIR / "cfg"
 LOG_DIR = BASE_DIR / "log"
@@ -56,8 +46,12 @@ FIELD_BG = "#3b3b3b"
 FIELD_TEXT = "#181818"
 BLUE = "#4a9bff"
 YELLOW = "#f2b01e"
-RED = "#7f7f7f"
+ICON_GRAY = "#5b5b5b"
 HOVER_DARK = "#222428"
+
+WAIT_TIME = 3600
+POST_INTERVAL = 10
+MONITOR_CHECK_INTERVAL = 5
 
 file_lock = threading.RLock()
 send_lock = threading.Lock()
@@ -144,7 +138,6 @@ def get_file_hash(path):
         return None
 
 
-
 def file_is_free(path):
     try:
         with open(path, "rb+"):
@@ -153,18 +146,19 @@ def file_is_free(path):
         return False
 
 
-
 def send_file(path):
     if not config.get("webhook"):
         return False
 
     filename = os.path.basename(path)
-    error_dir = Path(config.get("folder", "")) / "ERROR"
+    watched_folder = config.get("folder", "")
+    error_dir = Path(watched_folder) / "ERROR" if watched_folder else None
 
     try:
         if os.path.getsize(path) / (1024 * 1024) > 25:
-            error_dir.mkdir(exist_ok=True)
-            shutil.move(path, error_dir / filename)
+            if error_dir is not None:
+                error_dir.mkdir(exist_ok=True)
+                shutil.move(path, error_dir / filename)
             return False
     except Exception:
         return False
@@ -220,10 +214,14 @@ def send_file(path):
         return False
 
 
-
 def send_now_manual():
     if not config.get("folder"):
         signals.toast.emit("Selecione uma pasta primeiro.")
+        return
+
+    folder = config.get("folder", "")
+    if not os.path.isdir(folder):
+        signals.toast.emit("A pasta monitorada não existe.")
         return
 
     if not send_lock.acquire(blocking=False):
@@ -232,9 +230,9 @@ def send_now_manual():
 
     try:
         files = [
-            os.path.join(config["folder"], f)
-            for f in os.listdir(config["folder"])
-            if os.path.isfile(os.path.join(config["folder"], f))
+            os.path.join(folder, f)
+            for f in os.listdir(folder)
+            if os.path.isfile(os.path.join(folder, f))
         ]
         sent_any = False
         for file in sorted(files, key=os.path.getctime):
@@ -243,7 +241,10 @@ def send_now_manual():
             if send_file(file):
                 sent_any = True
                 signals.toast.emit(f"Enviado: {os.path.basename(file)}")
-                time.sleep(10)
+                for _ in range(POST_INTERVAL):
+                    if stop_event.is_set():
+                        break
+                    time.sleep(1)
         if not sent_any:
             signals.toast.emit("Nenhum arquivo disponível para enviar agora.")
     except Exception:
@@ -254,31 +255,34 @@ def send_now_manual():
         signals.refresh_fields.emit()
 
 
-
 def monitoring_loop():
     global monitoring
     while not stop_event.is_set():
         if monitoring and config.get("folder") and config.get("webhook"):
-            if send_lock.acquire(blocking=False):
+            folder = config.get("folder", "")
+            if os.path.isdir(folder) and send_lock.acquire(blocking=False):
                 try:
                     now = time.time()
                     files = [
-                        os.path.join(config["folder"], f)
-                        for f in os.listdir(config["folder"])
-                        if os.path.isfile(os.path.join(config["folder"], f))
+                        os.path.join(folder, f)
+                        for f in os.listdir(folder)
+                        if os.path.isfile(os.path.join(folder, f))
                     ]
-                    ready = [p for p in files if now - os.path.getctime(p) >= 3600]
+                    ready = [p for p in files if now - os.path.getctime(p) >= WAIT_TIME]
                     for file in sorted(ready, key=os.path.getctime):
                         if stop_event.is_set() or not monitoring:
                             break
                         if send_file(file):
                             signals.toast.emit(f"Enviado automaticamente: {os.path.basename(file)}")
-                            time.sleep(10)
+                            for _ in range(POST_INTERVAL):
+                                if stop_event.is_set() or not monitoring:
+                                    break
+                                time.sleep(1)
                 except Exception:
                     traceback.print_exc()
                 finally:
                     send_lock.release()
-        for _ in range(300):
+        for _ in range(MONITOR_CHECK_INTERVAL):
             if stop_event.is_set():
                 break
             time.sleep(1)
@@ -312,16 +316,16 @@ class HoverButton(QPushButton):
 
     def enterEvent(self, event):
         self.apply_style(True)
-        return super().enterEvent(event)
+        super().enterEvent(event)
 
     def leaveEvent(self, event):
         self.apply_style(False)
-        return super().leaveEvent(event)
+        super().leaveEvent(event)
 
 
 class CircleActionButton(HoverButton):
     def __init__(self, text="●", tooltip=""):
-        super().__init__(text, size=40, tooltip=tooltip, bg=BLUE, hover="#6fb4ff", fg="#ffffff", font_size=18)
+        super().__init__(text, size=32, tooltip=tooltip, bg=BLUE, hover="#6fb4ff", fg="#ffffff", font_size=15)
 
 
 class RoundedPanel(QWidget):
@@ -335,14 +339,14 @@ class RoundedPanel(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         rect = self.rect().adjusted(1, 1, -1, -1)
         path = QPainterPath()
-        path.addRoundedRect(rect, 28, 28)
+        path.addRoundedRect(rect, 22, 22)
         painter.fillPath(path, QColor(PANEL))
         pen = QPen(QColor("#1c1d21"))
         pen.setWidth(1)
         painter.setPen(pen)
         painter.drawPath(path)
         painter.end()
-        return super().paintEvent(event)
+        super().paintEvent(event)
 
 
 class WebhookWindow(QWidget):
@@ -353,29 +357,29 @@ class WebhookWindow(QWidget):
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(810, 470)
+        self.setFixedSize(648, 376)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(18, 18, 18, 18)
+        outer.setContentsMargins(14, 14, 14, 14)
 
         self.panel = RoundedPanel()
         outer.addWidget(self.panel)
 
         layout = QVBoxLayout(self.panel)
-        layout.setContentsMargins(32, 22, 24, 18)
-        layout.setSpacing(18)
+        layout.setContentsMargins(26, 18, 20, 16)
+        layout.setSpacing(14)
 
         self.title = QLabel(f"Webhook Uploader v{APP_VERSION}")
         self.title.setAlignment(Qt.AlignHCenter)
-        self.title.setStyleSheet(f"color:{BLUE}; font: 700 24px 'Segoe UI';")
+        self.title.setStyleSheet(f"color:{BLUE}; font: 700 19px 'Segoe UI';")
         layout.addWidget(self.title)
 
         self.webhook_label = QLabel("Webhook")
-        self.webhook_label.setStyleSheet(f"color:{MUTED}; font: 600 18px 'Segoe UI';")
+        self.webhook_label.setStyleSheet(f"color:{MUTED}; font: 600 14px 'Segoe UI';")
         layout.addWidget(self.webhook_label)
 
         self.webhook_row = QHBoxLayout()
-        self.webhook_row.setSpacing(16)
+        self.webhook_row.setSpacing(12)
         self.webhook_edit = self.make_field("Cole o webhook do Discord")
         self.webhook_row.addWidget(self.webhook_edit, 1)
         self.webhook_btn = CircleActionButton("✎", "Editar webhook")
@@ -384,11 +388,11 @@ class WebhookWindow(QWidget):
         layout.addLayout(self.webhook_row)
 
         self.folder_label = QLabel("Watched Folder")
-        self.folder_label.setStyleSheet(f"color:{MUTED}; font: 600 18px 'Segoe UI';")
+        self.folder_label.setStyleSheet(f"color:{MUTED}; font: 600 14px 'Segoe UI';")
         layout.addWidget(self.folder_label)
 
         self.folder_row = QHBoxLayout()
-        self.folder_row.setSpacing(16)
+        self.folder_row.setSpacing(12)
         self.folder_edit = self.make_field("Selecione a pasta monitorada")
         self.folder_row.addWidget(self.folder_edit, 1)
         self.folder_btn = CircleActionButton("⋯", "Escolher pasta")
@@ -400,30 +404,30 @@ class WebhookWindow(QWidget):
 
         bottom = QHBoxLayout()
         bottom.setContentsMargins(0, 0, 0, 0)
-        bottom.setSpacing(10)
-        bottom.addStretch(1)
+        bottom.setSpacing(8)
 
-        self.pause_btn = HoverButton("❚❚", size=54, tooltip="Pausar / continuar", bg="transparent", hover="#2c2210", fg=YELLOW, font_size=24)
+        self.pause_btn = HoverButton("❚❚", size=42, tooltip="Pausar / continuar", bg="transparent", hover="#2c2210", fg=YELLOW, font_size=18)
         self.pause_btn.clicked.connect(self.toggle_monitoring)
         bottom.addWidget(self.pause_btn)
 
-        self.clear_btn = HoverButton("⌫", size=54, tooltip="Limpar histórico", bg="transparent", hover="#232323", fg="#5b5b5b", font_size=24)
+        self.send_now_btn = HoverButton("➜", size=42, tooltip="Enviar agora", bg="transparent", hover="#1d2733", fg=BLUE, font_size=18)
+        self.send_now_btn.clicked.connect(self.start_send_now)
+        bottom.addWidget(self.send_now_btn)
+
+        self.clear_btn = HoverButton("⌫", size=42, tooltip="Limpar histórico", bg="transparent", hover="#232323", fg=ICON_GRAY, font_size=18)
         self.clear_btn.clicked.connect(self.clear_history)
         bottom.addWidget(self.clear_btn)
 
-        self.cfg_btn = HoverButton("⚙", size=54, tooltip="Abrir pasta de configs", bg="transparent", hover="#232323", fg="#5b5b5b", font_size=24)
+        self.cfg_btn = HoverButton("⚙", size=42, tooltip="Abrir pasta de configs", bg="transparent", hover="#232323", fg=ICON_GRAY, font_size=18)
         self.cfg_btn.clicked.connect(self.open_config_folder)
         bottom.addWidget(self.cfg_btn)
 
-        self.close_btn = HoverButton("✕", size=54, tooltip="Fechar", bg="#3a3a3a", hover="#525252", fg="#161616", font_size=22)
-        self.close_btn.clicked.connect(self.hide)
+        self.close_btn = HoverButton("✕", size=42, tooltip="Fechar aplicativo", bg="#3a3a3a", hover="#525252", fg="#161616", font_size=16)
+        self.close_btn.clicked.connect(self.exit_app)
         bottom.addWidget(self.close_btn)
 
+        bottom.addStretch(1)
         layout.addLayout(bottom)
-
-        self.status_label = QLabel("")
-        self.status_label.setVisible(False)
-        layout.addWidget(self.status_label)
 
         self.refresh_fields()
         self.update_pause_visual()
@@ -436,16 +440,16 @@ class WebhookWindow(QWidget):
         edit = QLineEdit()
         edit.setReadOnly(True)
         edit.setPlaceholderText(placeholder)
-        edit.setMinimumHeight(46)
+        edit.setMinimumHeight(37)
         edit.setStyleSheet(
             f"""
             QLineEdit {{
                 background: {FIELD_BG};
                 color: {FIELD_TEXT};
                 border: none;
-                border-radius: 23px;
-                padding: 0 18px;
-                font: 600 16px 'Segoe UI';
+                border-radius: 18px;
+                padding: 0 14px;
+                font: 600 13px 'Segoe UI';
             }}
             QLineEdit::placeholder {{ color: #7c7c7c; }}
             """
@@ -453,13 +457,11 @@ class WebhookWindow(QWidget):
         return edit
 
     def refresh_fields(self):
-        webhook = config.get("webhook", "")
-        folder = config.get("folder", "")
-        self.webhook_edit.setText(webhook if webhook else "")
-        self.folder_edit.setText(folder if folder else "")
+        self.webhook_edit.setText(config.get("webhook", ""))
+        self.folder_edit.setText(config.get("folder", ""))
 
     def show_tray_message(self, text):
-        self.tray_icon.showMessage(APP_NAME, text, self.tray_icon.Information, 2500)
+        self.tray_icon.showMessage(APP_NAME, text, QSystemTrayIcon.Information, 2500)
 
     def edit_webhook(self):
         current = config.get("webhook", "")
@@ -483,6 +485,10 @@ class WebhookWindow(QWidget):
             self.refresh_fields()
             signals.toast.emit("Pasta monitorada atualizada.")
 
+    def start_send_now(self):
+        thread = threading.Thread(target=send_now_manual, daemon=True)
+        thread.start()
+
     def clear_history(self):
         with file_lock:
             sent_history.clear()
@@ -503,8 +509,7 @@ class WebhookWindow(QWidget):
         self.update_pause_visual()
 
     def update_pause_visual(self):
-        active = monitoring
-        if active:
+        if monitoring:
             self.pause_btn.setText("❚❚")
             self.pause_btn._fg = YELLOW
             self.pause_btn._hover = "#2c2210"
@@ -526,26 +531,32 @@ class WebhookWindow(QWidget):
     def show_near_tray(self):
         self.refresh_fields()
         screen = QApplication.primaryScreen().availableGeometry()
-        x = screen.right() - self.width() - 30
-        y = screen.bottom() - self.height() - 70
+        x = screen.right() - self.width() - 24
+        y = screen.bottom() - self.height() - 54
         self.move(x, y)
         self.show()
         self.raise_()
         self.activateWindow()
 
+    def exit_app(self):
+        stop_event.set()
+        self.hide()
+        self.tray_icon.hide()
+        QApplication.quit()
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-        return super().mousePressEvent(event)
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if self.drag_pos is not None and event.buttons() & Qt.LeftButton:
             self.move(event.globalPosition().toPoint() - self.drag_pos)
-        return super().mouseMoveEvent(event)
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         self.drag_pos = None
-        return super().mouseReleaseEvent(event)
+        super().mouseReleaseEvent(event)
 
 
 class TrayController(QObject):
@@ -605,9 +616,9 @@ class TrayController(QObject):
 
     def exit_app(self):
         stop_event.set()
+        self.window.hide()
         self.tray.hide()
         QApplication.quit()
-
 
 
 def ensure_first_run(window: WebhookWindow):
