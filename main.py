@@ -21,15 +21,14 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QFileDialog,
-    QInputDialog,
+    QDialog,
     QMenu,
-    QMessageBox,
     QSystemTrayIcon,
     QPushButton,
 )
 
 APP_NAME = "Webhook-Uploader"
-APP_VERSION = "1.8.2"
+APP_VERSION = "1.8.3"
 BASE_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / APP_NAME
 CFG_DIR = BASE_DIR / "cfg"
 LOG_DIR = BASE_DIR / "log"
@@ -48,6 +47,10 @@ BLUE = "#4a9bff"
 YELLOW = "#f2b01e"
 ICON_GRAY = "#5b5b5b"
 HOVER_DARK = "#222428"
+RED = "#ff5f73"
+DIALOG_BG = "#101114"
+DIALOG_PANEL = "#17191d"
+DIALOG_BORDER = "#272b31"
 
 WAIT_TIME = 3600
 POST_INTERVAL = 10
@@ -144,6 +147,17 @@ def file_is_free(path):
             return True
     except Exception:
         return False
+
+
+def is_valid_webhook(text: str) -> bool:
+    text = (text or "").strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    return (
+        lowered.startswith("https://discord.com/api/webhooks/")
+        or lowered.startswith("https://discordapp.com/api/webhooks/")
+    )
 
 
 def send_file(path):
@@ -349,6 +363,249 @@ class RoundedPanel(QWidget):
         super().paintEvent(event)
 
 
+class WebhookInputDialog(QDialog):
+    def __init__(self, parent=None, current_text=""):
+        super().__init__(parent)
+        self.drag_pos = None
+        self._result_text = ""
+        self.setModal(True)
+        self.setWindowTitle("Webhook")
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFixedSize(560, 250)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 12, 12, 12)
+
+        panel = RoundedPanel()
+        outer.addWidget(panel)
+        panel.setStyleSheet("background: transparent;")
+
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+
+        top = QHBoxLayout()
+        top.setSpacing(10)
+
+        icon = QLabel("🔗")
+        icon.setStyleSheet(f"color:{BLUE}; font: 700 20px 'Segoe UI Emoji';")
+        top.addWidget(icon, 0, Qt.AlignTop)
+
+        title_wrap = QVBoxLayout()
+        title_wrap.setSpacing(2)
+
+        title = QLabel("Configurar webhook")
+        title.setStyleSheet(f"color:{BLUE}; font: 700 20px 'Segoe UI';")
+        title_wrap.addWidget(title)
+
+        subtitle = QLabel("Cole a URL completa do webhook do Discord. O campo ficou maior para facilitar leitura e edição.")
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet(f"color:{TEXT}; font: 500 13px 'Segoe UI';")
+        title_wrap.addWidget(subtitle)
+
+        top.addLayout(title_wrap, 1)
+        layout.addLayout(top)
+
+        self.input = QLineEdit()
+        self.input.setText(current_text)
+        self.input.setPlaceholderText("https://discord.com/api/webhooks/...")
+        self.input.setMinimumHeight(46)
+        self.input.setStyleSheet(
+            f"""
+            QLineEdit {{
+                background: #1f2227;
+                color: #f1f2f4;
+                border: 1px solid #30353c;
+                border-radius: 12px;
+                padding: 0 14px;
+                selection-background-color: {BLUE};
+                font: 600 14px 'Segoe UI';
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {BLUE};
+            }}
+            QLineEdit::placeholder {{
+                color: #7f8792;
+            }}
+            """
+        )
+        layout.addWidget(self.input)
+
+        self.error_label = QLabel("")
+        self.error_label.setMinimumHeight(18)
+        self.error_label.setStyleSheet(f"color:{RED}; font: 600 12px 'Segoe UI';")
+        layout.addWidget(self.error_label)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+
+        self.paste_btn = QPushButton("Colar")
+        self.paste_btn.setCursor(Qt.PointingHandCursor)
+        self.paste_btn.clicked.connect(self.paste_from_clipboard)
+        self.paste_btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: #23272e;
+                color: {TEXT};
+                border: 1px solid #323842;
+                border-radius: 12px;
+                padding: 10px 16px;
+                font: 600 13px 'Segoe UI';
+            }}
+            QPushButton:hover {{ background: #2a3038; }}
+            """
+        )
+        actions.addWidget(self.paste_btn)
+
+        self.clear_btn = QPushButton("Limpar")
+        self.clear_btn.setCursor(Qt.PointingHandCursor)
+        self.clear_btn.clicked.connect(self.input.clear)
+        self.clear_btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: #23272e;
+                color: {TEXT};
+                border: 1px solid #323842;
+                border-radius: 12px;
+                padding: 10px 16px;
+                font: 600 13px 'Segoe UI';
+            }}
+            QPushButton:hover {{ background: #2a3038; }}
+            """
+        )
+        actions.addWidget(self.clear_btn)
+
+        actions.addStretch(1)
+
+        self.cancel_btn = QPushButton("Cancelar")
+        self.cancel_btn.setCursor(Qt.PointingHandCursor)
+        self.cancel_btn.clicked.connect(self.reject)
+        self.cancel_btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: #25282e;
+                color: {TEXT};
+                border: 1px solid #363b44;
+                border-radius: 12px;
+                padding: 10px 18px;
+                font: 700 13px 'Segoe UI';
+            }}
+            QPushButton:hover {{ background: #2c3139; }}
+            """
+        )
+        actions.addWidget(self.cancel_btn)
+
+        self.save_btn = QPushButton("Salvar")
+        self.save_btn.setCursor(Qt.PointingHandCursor)
+        self.save_btn.clicked.connect(self.try_accept)
+        self.save_btn.setDefault(True)
+        self.save_btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: {BLUE};
+                color: white;
+                border: none;
+                border-radius: 12px;
+                padding: 10px 18px;
+                font: 700 13px 'Segoe UI';
+            }}
+            QPushButton:hover {{ background: #69adff; }}
+            """
+        )
+        actions.addWidget(self.save_btn)
+
+        layout.addLayout(actions)
+
+        self.input.returnPressed.connect(self.try_accept)
+        self.input.selectAll()
+        self.input.setFocus()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect().adjusted(6, 6, -6, -6)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 24, 24)
+        painter.fillPath(path, QColor(0, 0, 0, 110))
+        painter.end()
+        super().paintEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.drag_pos is not None and event.buttons() & Qt.LeftButton:
+            self.move(event.globalPosition().toPoint() - self.drag_pos)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self.drag_pos = None
+        super().mouseReleaseEvent(event)
+
+    def show_error(self, text: str):
+        self.error_label.setText(text)
+        self.input.setStyleSheet(
+            f"""
+            QLineEdit {{
+                background: #1f2227;
+                color: #f1f2f4;
+                border: 1px solid {RED};
+                border-radius: 12px;
+                padding: 0 14px;
+                selection-background-color: {BLUE};
+                font: 600 14px 'Segoe UI';
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {RED};
+            }}
+            QLineEdit::placeholder {{
+                color: #7f8792;
+            }}
+            """
+        )
+
+    def clear_error(self):
+        self.error_label.setText("")
+        self.input.setStyleSheet(
+            f"""
+            QLineEdit {{
+                background: #1f2227;
+                color: #f1f2f4;
+                border: 1px solid #30353c;
+                border-radius: 12px;
+                padding: 0 14px;
+                selection-background-color: {BLUE};
+                font: 600 14px 'Segoe UI';
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {BLUE};
+            }}
+            QLineEdit::placeholder {{
+                color: #7f8792;
+            }}
+            """
+        )
+
+    def paste_from_clipboard(self):
+        self.input.setText(QApplication.clipboard().text().strip())
+        self.clear_error()
+
+    def try_accept(self):
+        text = self.input.text().strip()
+        if not is_valid_webhook(text):
+            self.show_error("Cole uma URL válida do Discord webhook.")
+            return
+        self._result_text = text
+        self.clear_error()
+        self.accept()
+
+    def get_value(self) -> str:
+        return self._result_text
+
+
 class WebhookWindow(QWidget):
     def __init__(self, tray_icon):
         super().__init__()
@@ -465,13 +722,9 @@ class WebhookWindow(QWidget):
 
     def edit_webhook(self):
         current = config.get("webhook", "")
-        text, ok = QInputDialog.getText(self, "Webhook", "Paste the Discord Webhook:", text=current)
-        if ok:
-            text = text.strip()
-            if text and "discord.com" not in text and "discordapp.com" not in text:
-                QMessageBox.warning(self, APP_NAME, "Webhook inválido.")
-                return
-            config["webhook"] = text
+        dialog = WebhookInputDialog(self, current)
+        if dialog.exec() == QDialog.Accepted:
+            config["webhook"] = dialog.get_value()
             save_json(CONFIG_FILE, config)
             self.refresh_fields()
             signals.toast.emit("Webhook atualizado.")
