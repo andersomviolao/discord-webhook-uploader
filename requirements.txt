@@ -1,0 +1,6 @@
+requests
+Send2Trash
+Pillow
+pystray
+customtkinter
+PySide6
