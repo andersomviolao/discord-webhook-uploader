@@ -13,7 +13,7 @@ import traceback
 from pathlib import Path
 
 from send2trash import send2trash
-from PySide6.QtCore import Qt, Signal, QObject, QEasingCurve, QPropertyAnimation, QTimer
+from PySide6.QtCore import Qt, Signal, QObject, QEasingCurve, QPropertyAnimation, QTimer, QRect
 from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QBrush, QLinearGradient
 from PySide6.QtWidgets import (
     QApplication,
@@ -30,8 +30,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QScrollArea,
     QTextEdit,
-    QDialog,
-    QColorDialog,
     )
 
 try:
@@ -40,7 +38,7 @@ except Exception:
     winreg = None
 
 APP_NAME = "Webhook-Uploader"
-APP_VERSION = "2.0.4"
+APP_VERSION = "2.0.5"
 BASE_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / APP_NAME
 CFG_DIR = BASE_DIR / "cfg"
 LOG_DIR = BASE_DIR / "log"
@@ -741,22 +739,38 @@ class HueSlider(QWidget):
         self.hueChanged.emit(self._hue)
 
 
-class EmbedColorDialog(QDialog):
+class EmbedColorPopup(QWidget):
+    colorChanged = Signal(str)
+    colorSaved = Signal(str)
+
     def __init__(self, initial_hex=DEFAULT_EMBED_COLOR, parent=None):
         super().__init__(parent)
+        self._closing = False
+        self._syncing_hex = False
         self.selected_hex = normalize_hex_color(initial_hex)
-        self.setModal(True)
-        self.setWindowTitle('Cor do embed')
-        self.resize(520, 430)
-        self.setStyleSheet(
+        self._hue, self._sat, self._val = self.hex_to_hsv(self.selected_hex)
+
+        self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        panel = QFrame()
+        panel.setObjectName("embedColorPopup")
+        panel.setStyleSheet(
             f"""
-            QDialog {{
+            QFrame#embedColorPopup {{
                 background: {PANEL};
-                color: {TEXT};
+                border: 1px solid #23262d;
+                border-radius: 18px;
             }}
             QLabel {{
                 color: {TEXT};
-                font: 600 10px 'Segoe UI';
+                font: 700 10px 'Segoe UI';
+                background: transparent;
+                border: none;
             }}
             QLineEdit {{
                 background: {FIELD_BG};
@@ -770,109 +784,160 @@ class EmbedColorDialog(QDialog):
             QLineEdit:focus {{
                 border: 1px solid {BLUE};
             }}
-            QPushButton {{
-                background: #24272d;
-                color: {TEXT};
-                border: 1px solid #30343d;
-                border-radius: 12px;
-                padding: 7px 12px;
-                font: 700 10px 'Segoe UI';
-            }}
-            QPushButton:hover {{
-                background: #2b3038;
-            }}
-            QColorDialog {{
-                background: {PANEL};
-            }}
-            QColorDialog QWidget {{
-                background: {PANEL};
-                color: {TEXT};
-                font: 600 10px 'Segoe UI';
+            QLineEdit::placeholder {{
+                color: #6f7580;
             }}
             """
         )
+        outer.addWidget(panel)
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(14, 14, 14, 14)
+        root = QVBoxLayout(panel)
+        root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(10)
 
-        self.picker = QColorDialog(QColor(self.selected_hex), self)
-        self.picker.setOption(QColorDialog.DontUseNativeDialog, True)
-        self.picker.setOption(QColorDialog.NoButtons, True)
-        self.picker.setOption(QColorDialog.ShowAlphaChannel, False)
-        self.picker.setCurrentColor(QColor(self.selected_hex))
-        self.picker.currentColorChanged.connect(self.on_picker_color_changed)
-        self.picker.setMinimumHeight(300)
-        root.addWidget(self.picker, 1)
+        self.spectrum = ColorSpectrumBox(self._hue, self._sat, self._val)
+        self.spectrum.setMinimumSize(238, 156)
+        self.spectrum.colorChanged.connect(self.on_sv_changed)
+        root.addWidget(self.spectrum)
 
-        info = QLabel('Hex')
-        root.addWidget(info)
+        self.hue_slider = HueSlider(self._hue)
+        self.hue_slider.hueChanged.connect(self.on_hue_changed)
+        root.addWidget(self.hue_slider)
 
-        controls = QHBoxLayout()
-        controls.setContentsMargins(0, 0, 0, 0)
-        controls.setSpacing(10)
+        bottom = QHBoxLayout()
+        bottom.setContentsMargins(0, 0, 0, 0)
+        bottom.setSpacing(10)
 
         self.preview = QLabel()
         self.preview.setFixedSize(28, 28)
-        controls.addWidget(self.preview)
+        bottom.addWidget(self.preview, 0, Qt.AlignVCenter)
+
+        hex_col = QVBoxLayout()
+        hex_col.setContentsMargins(0, 0, 0, 0)
+        hex_col.setSpacing(4)
+
+        self.hex_label = QLabel('Hex')
+        self.hex_label.setStyleSheet(f"color:{TEXT}; font: 700 9px 'Segoe UI';")
+        hex_col.addWidget(self.hex_label)
 
         self.hex_input = QLineEdit(self.selected_hex)
+        self.hex_input.setPlaceholderText('#F54927')
         self.hex_input.setMaxLength(7)
-        self.hex_input.editingFinished.connect(self.apply_hex_input)
-        controls.addWidget(self.hex_input, 1)
+        self.hex_input.textChanged.connect(self.on_hex_text_changed)
+        self.hex_input.editingFinished.connect(self.on_hex_editing_finished)
+        hex_col.addWidget(self.hex_input)
 
-        self.cancel_btn = QPushButton('Cancelar')
-        self.cancel_btn.clicked.connect(self.reject)
-        controls.addWidget(self.cancel_btn)
+        bottom.addLayout(hex_col, 1)
+        root.addLayout(bottom)
 
-        self.apply_btn = QPushButton('Aplicar')
-        self.apply_btn.setStyleSheet(
-            f"""
-            QPushButton {{
-                background: {BLUE};
-                color: white;
-                border: none;
-                border-radius: 12px;
-                padding: 7px 14px;
-                font: 700 10px 'Segoe UI';
-            }}
-            QPushButton:hover {{
-                background: #69adff;
-            }}
-            """
-        )
-        self.apply_btn.clicked.connect(self.accept_current)
-        controls.addWidget(self.apply_btn)
-
-        root.addLayout(controls)
         self.update_preview(self.selected_hex)
+
+    @staticmethod
+    def hex_to_hsv(hex_color):
+        color = QColor(normalize_hex_color(hex_color))
+        r, g, b, _ = color.getRgbF()
+        return colorsys.rgb_to_hsv(r, g, b)
+
+    def show_anchored(self, anchor_widget, boundary_widget=None):
+        self.adjustSize()
+        anchor_global = anchor_widget.mapToGlobal(anchor_widget.rect().topLeft())
+        anchor_rect = QRect(anchor_global, anchor_widget.size())
+        screen = anchor_widget.screen() or QApplication.primaryScreen()
+        area = screen.availableGeometry() if screen else QApplication.primaryScreen().availableGeometry()
+
+        margin = 8
+        candidates = [
+            (anchor_rect.left() - self.width() + anchor_rect.width(), anchor_rect.top() - self.height() - margin),
+            (anchor_rect.left() - self.width() + anchor_rect.width(), anchor_rect.bottom() + margin),
+            (anchor_rect.right() + margin, anchor_rect.top()),
+            (anchor_rect.left() - self.width() - margin, anchor_rect.top()),
+        ]
+
+        def clamp(x, y):
+            x = max(area.left() + 6, min(x, area.right() - self.width() - 6))
+            y = max(area.top() + 6, min(y, area.bottom() - self.height() - 6))
+            return x, y
+
+        x, y = candidates[0]
+        for cx, cy in candidates:
+            if (area.left() <= cx <= area.right() - self.width()) and (area.top() <= cy <= area.bottom() - self.height()):
+                x, y = cx, cy
+                break
+        x, y = clamp(x, y)
+
+        if boundary_widget and boundary_widget.isVisible():
+            parent_global = boundary_widget.mapToGlobal(boundary_widget.rect().topLeft())
+            parent_rect = QRect(parent_global, boundary_widget.size())
+            x = max(parent_rect.left() + 8, min(x, parent_rect.right() - self.width() - 8))
+            y = max(parent_rect.top() + 8, min(y, parent_rect.bottom() - self.height() - 8))
+
+        self.move(int(x), int(y))
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def update_preview(self, hex_color):
         self.preview.setStyleSheet(
             f'background:{hex_color}; border:2px solid #2f343d; border-radius:14px;'
         )
 
-    def on_picker_color_changed(self, color):
-        if not color.isValid():
-            return
-        self.selected_hex = color.name().upper()
-        self.hex_input.setText(self.selected_hex)
-        self.update_preview(self.selected_hex)
+    def set_selected_hex(self, hex_color, sync_hsv=True, sync_hex=True, emit_live=True):
+        normalized = normalize_hex_color(hex_color)
+        self.selected_hex = normalized
+        if sync_hsv:
+            self._hue, self._sat, self._val = self.hex_to_hsv(normalized)
+            self.hue_slider.set_hue(self._hue)
+            self.spectrum.set_hsv(self._hue, self._sat, self._val)
+        self.update_preview(normalized)
+        if sync_hex:
+            self._syncing_hex = True
+            self.hex_input.setText(normalized)
+            self._syncing_hex = False
+        if emit_live:
+            self.colorChanged.emit(normalized)
 
-    def apply_hex_input(self):
-        parsed = parse_hex_color(self.hex_input.text())
+    def on_sv_changed(self, sat, val):
+        self._sat = sat
+        self._val = val
+        color = QColor.fromHsvF(self._hue, self._sat, self._val)
+        self.set_selected_hex(color.name().upper(), sync_hsv=False, sync_hex=True, emit_live=True)
+
+    def on_hue_changed(self, hue):
+        self._hue = hue
+        self.spectrum.set_hue(hue)
+        color = QColor.fromHsvF(self._hue, self._sat, self._val)
+        self.set_selected_hex(color.name().upper(), sync_hsv=False, sync_hex=True, emit_live=True)
+
+    def on_hex_text_changed(self, text):
+        if self._syncing_hex:
+            return
+        parsed = parse_hex_color(text)
         if not parsed:
-            self.hex_input.setText(self.selected_hex)
             return
-        self.selected_hex = parsed
-        self.picker.setCurrentColor(QColor(parsed))
-        self.hex_input.setText(parsed)
-        self.update_preview(parsed)
+        self.set_selected_hex(parsed, sync_hsv=True, sync_hex=False, emit_live=True)
 
-    def accept_current(self):
-        self.apply_hex_input()
-        self.accept()
+    def on_hex_editing_finished(self):
+        parsed = parse_hex_color(self.hex_input.text())
+        self._syncing_hex = True
+        self.hex_input.setText(parsed or self.selected_hex)
+        self._syncing_hex = False
 
+    def commit_and_close(self):
+        if self._closing:
+            return
+        self._closing = True
+        self.colorSaved.emit(self.selected_hex)
+        self.hide()
+
+    def hideEvent(self, event):
+        if not self._closing:
+            self._closing = True
+            self.colorSaved.emit(self.selected_hex)
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        self._closing = False
+        super().showEvent(event)
 
 class RoundedPanel(QWidget):
     def __init__(self):
@@ -1155,8 +1220,10 @@ class PostTemplatePage(PageBase):
         buttons.addWidget(self.test_btn)
         buttons.addStretch(1)
 
+        self.color_popup = None
+
         self.color_btn = ColorSwatchButton(config.get("embed_color", DEFAULT_EMBED_COLOR))
-        self.color_btn.clicked.connect(self.open_embed_color_dialog)
+        self.color_btn.clicked.connect(self.toggle_embed_color_popup)
         buttons.addWidget(self.color_btn, 0, Qt.AlignVCenter)
 
         self.embed_label = QLabel("Embed")
@@ -1173,6 +1240,8 @@ class PostTemplatePage(PageBase):
         self.editor.setPlainText(load_template())
         self.embed_toggle.setChecked(bool(config.get("use_embed", False)))
         self.color_btn.set_color(config.get("embed_color", DEFAULT_EMBED_COLOR))
+        if self.color_popup is not None and self.color_popup.isVisible():
+            self.color_popup.set_selected_hex(config.get("embed_color", DEFAULT_EMBED_COLOR), sync_hsv=True, sync_hex=True, emit_live=False)
         has_webhook = bool((config.get("webhook") or "").strip())
         self.test_btn.setEnabled(has_webhook)
         self.test_btn.setStyleSheet(self.window.small_button_style(enabled=has_webhook, accent=BLUE))
@@ -1185,12 +1254,29 @@ class PostTemplatePage(PageBase):
         config["use_embed"] = self.embed_toggle.isChecked()
         save_config()
 
-    def open_embed_color_dialog(self):
-        dialog = EmbedColorDialog(config.get("embed_color", DEFAULT_EMBED_COLOR), self.window)
-        if dialog.exec() == QDialog.Accepted:
-            config["embed_color"] = normalize_hex_color(dialog.selected_hex)
-            save_config()
-            self.color_btn.set_color(config["embed_color"])
+    def ensure_color_popup(self):
+        if self.color_popup is None:
+            self.color_popup = EmbedColorPopup(config.get("embed_color", DEFAULT_EMBED_COLOR), self.window)
+            self.color_popup.colorChanged.connect(self.on_embed_color_live_changed)
+            self.color_popup.colorSaved.connect(self.on_embed_color_saved)
+        return self.color_popup
+
+    def toggle_embed_color_popup(self):
+        popup = self.ensure_color_popup()
+        if popup.isVisible():
+            popup.commit_and_close()
+            return
+        popup.set_selected_hex(config.get("embed_color", DEFAULT_EMBED_COLOR), sync_hsv=True, sync_hex=True, emit_live=False)
+        popup.show_anchored(self.color_btn, self.window)
+
+    def on_embed_color_live_changed(self, hex_color):
+        self.color_btn.set_color(hex_color)
+
+    def on_embed_color_saved(self, hex_color):
+        normalized = normalize_hex_color(hex_color)
+        config["embed_color"] = normalized
+        save_config()
+        self.color_btn.set_color(normalized)
 
     def test_webhook(self):
         ok, msg = send_test_message()
