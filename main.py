@@ -38,7 +38,7 @@ except Exception:
     winreg = None
 
 APP_NAME = "Webhook-Uploader"
-APP_VERSION = "2.0.6"
+APP_VERSION = "2.0.9"
 BASE_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = BASE_DIR / "cfg.json"
 LOG_FILE = BASE_DIR / "log.json"
@@ -1228,58 +1228,6 @@ class FolderPage(PageBase):
         self.window.go_home()
 
 
-class EmbedPreviewCard(QFrame):
-    def __init__(self):
-        super().__init__()
-        self.setStyleSheet(
-            f"""
-            QFrame {{
-                background: #2b2d31;
-                border: 1px solid #23262d;
-                border-radius: 16px;
-            }}
-            QLabel {{
-                background: transparent;
-                border: none;
-            }}
-            """
-        )
-        root = QHBoxLayout(self)
-        root.setContentsMargins(0, 12, 12, 12)
-        root.setSpacing(12)
-
-        self.color_bar = QFrame()
-        self.color_bar.setFixedWidth(4)
-        self.color_bar.setStyleSheet(f"background:{DEFAULT_EMBED_COLOR}; border-radius:2px;")
-        root.addWidget(self.color_bar)
-
-        content = QVBoxLayout()
-        content.setContentsMargins(0, 0, 0, 0)
-        content.setSpacing(4)
-
-        self.title = QLabel("Preview do embed")
-        self.title.setStyleSheet("color:#ffffff; font: 700 10px 'Segoe UI';")
-        content.addWidget(self.title)
-
-        self.subtitle = QLabel("Cor lateral e texto do post no estilo embed do Discord.")
-        self.subtitle.setWordWrap(True)
-        self.subtitle.setStyleSheet("color:#b5bac1; font: 500 9px 'Segoe UI';")
-        content.addWidget(self.subtitle)
-
-        self.text_label = QLabel("")
-        self.text_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.text_label.setWordWrap(True)
-        self.text_label.setStyleSheet("color:#dbdee1; font: 500 10px 'Segoe UI';")
-        content.addWidget(self.text_label)
-
-        root.addLayout(content, 1)
-
-    def set_preview(self, text: str, hex_color: str, use_embed: bool):
-        safe_text = text.strip() or "(Post vazio)"
-        self.color_bar.setStyleSheet(f"background:{normalize_hex_color(hex_color)}; border-radius:2px;")
-        self.title.setText("Preview do embed" if use_embed else "Preview do embed (modo padrão desligado)")
-        self.text_label.setText(safe_text)
-
 
 class PostTemplatePage(PageBase):
     def __init__(self, window):
@@ -1291,6 +1239,8 @@ class PostTemplatePage(PageBase):
         self.editor = QTextEdit()
         self.editor.setPlaceholderText("Digite aqui o conteúdo do post...")
         self.editor.setStyleSheet(self.window.text_edit_style())
+        self.editor.verticalScrollBar().setStyleSheet(self.window.scrollbar_widget_style())
+        self.editor.horizontalScrollBar().setStyleSheet(self.window.scrollbar_widget_style())
         self.editor.textChanged.connect(self.on_editor_text_changed)
         self.body.addWidget(self.editor, 1)
 
@@ -1299,8 +1249,6 @@ class PostTemplatePage(PageBase):
         self.help_label.setStyleSheet(f"color:{MUTED}; font: 500 9px 'Segoe UI';")
         self.body.addWidget(self.help_label)
 
-        self.preview_card = EmbedPreviewCard()
-        self.body.addWidget(self.preview_card)
 
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
@@ -1339,26 +1287,20 @@ class PostTemplatePage(PageBase):
         has_webhook = bool((config.get("webhook") or "").strip())
         self.test_btn.setEnabled(has_webhook)
         self.test_btn.setStyleSheet(self.window.small_button_style(enabled=has_webhook, accent=BLUE))
-        self.update_preview()
         self._loading = False
         self.editor.setFocus()
         cursor = self.editor.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         self.editor.setTextCursor(cursor)
 
-    def update_preview(self):
-        preview_text = build_test_message(self.editor.toPlainText())
-        self.preview_card.set_preview(preview_text, config.get("embed_color", DEFAULT_EMBED_COLOR), self.embed_toggle.isChecked())
 
     def on_editor_text_changed(self):
         if self._loading:
             return
-        self.update_preview()
 
     def toggle_embed(self):
         config["use_embed"] = self.embed_toggle.isChecked()
         save_config()
-        self.update_preview()
 
     def ensure_color_popup(self):
         if self.color_popup is None:
@@ -1377,14 +1319,12 @@ class PostTemplatePage(PageBase):
 
     def on_embed_color_live_changed(self, hex_color):
         self.color_btn.set_color(hex_color)
-        self.preview_card.set_preview(build_test_message(self.editor.toPlainText()), hex_color, self.embed_toggle.isChecked())
 
     def on_embed_color_saved(self, hex_color):
         normalized = normalize_hex_color(hex_color)
         config["embed_color"] = normalized
         save_config()
         self.color_btn.set_color(normalized)
-        self.update_preview()
 
     def test_webhook(self):
         ok, msg = send_test_message(self.editor.toPlainText(), self.embed_toggle.isChecked())
@@ -1453,7 +1393,9 @@ class SettingsPage(PageBase):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.scroll.setStyleSheet("QScrollArea { background: transparent; border: none; } QScrollBar:vertical { background: transparent; width: 8px; } QScrollBar::handle:vertical { background: #2a2d34; border-radius: 4px; min-height: 24px; } QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; } QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }")
+        self.scroll.setStyleSheet(self.window.scrollbar_style("QScrollArea"))
+        self.scroll.verticalScrollBar().setStyleSheet(self.window.scrollbar_widget_style())
+        self.scroll.horizontalScrollBar().setStyleSheet(self.window.scrollbar_widget_style())
 
         self.scroll_host = QWidget()
         self.scroll_host.setStyleSheet("background: transparent;")
@@ -1477,7 +1419,7 @@ class SettingsPage(PageBase):
         post_layout.setContentsMargins(0, 0, 0, 0)
         self.post_btn = self.window.make_small_button("Editar post", self.window.open_post_template_page)
         post_layout.addWidget(self.post_btn)
-        self.scroll_body.addWidget(SettingRow("Personalizar post", "Abre uma página para editar o texto do post, preview do embed e salvar tudo no cfg.json.", post_wrap))
+        self.scroll_body.addWidget(SettingRow("Personalizar post", "Abre uma página para editar o texto do post, escolher a cor do embed e salvar tudo no cfg.json.", post_wrap))
 
         clear_wrap = QWidget()
         clear_wrap.setStyleSheet("background: transparent;")
@@ -1606,6 +1548,59 @@ class MainWindow(QWidget):
         QLineEdit::placeholder {{ color: #6f7580; }}
         """
 
+    def scrollbar_style(self, selector="QScrollArea"):
+        return f"""
+        {selector} {{ background: transparent; border: none; }}
+        """
+
+    def scrollbar_widget_style(self):
+        return f"""
+        QScrollBar:vertical {{
+            background: transparent;
+            border: none;
+            width: 10px;
+            margin: 6px 2px 6px 0;
+        }}
+        QScrollBar::handle:vertical {{
+            background: #2a2d34;
+            border: none;
+            border-radius: 5px;
+            min-height: 24px;
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background: #343944;
+        }}
+        QScrollBar::handle:vertical:pressed {{
+            background: #3d4451;
+        }}
+        QScrollBar::add-line:vertical,
+        QScrollBar::sub-line:vertical {{
+            height: 0px;
+            background: transparent;
+            border: none;
+        }}
+        QScrollBar::add-page:vertical,
+        QScrollBar::sub-page:vertical {{
+            background: transparent;
+            border: none;
+        }}
+        QScrollBar:horizontal {{
+            background: transparent;
+            border: none;
+            height: 0px;
+            margin: 0;
+        }}
+        QScrollBar::handle:horizontal,
+        QScrollBar::add-line:horizontal,
+        QScrollBar::sub-line:horizontal,
+        QScrollBar::add-page:horizontal,
+        QScrollBar::sub-page:horizontal {{
+            background: transparent;
+            border: none;
+            width: 0px;
+        }}
+        """
+
     def text_edit_style(self):
         return f"""
         QTextEdit {{
@@ -1617,6 +1612,7 @@ class MainWindow(QWidget):
             font: 600 10px 'Segoe UI';
         }}
         QTextEdit:focus {{ border: 1px solid {BLUE}; }}
+        {self.scrollbar_style("QTextEdit")}
         """
 
     def make_primary_button(self, text, handler):
