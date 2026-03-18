@@ -38,10 +38,13 @@ except Exception:
     winreg = None
 
 APP_NAME = "Webhook-Uploader"
-APP_VERSION = "2.0.6"
+APP_VERSION = "2.0.5"
 BASE_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / APP_NAME
-CONFIG_FILE = BASE_DIR / "cfg.json"
-LOG_FILE = BASE_DIR / "log.json"
+CFG_DIR = BASE_DIR / "cfg"
+LOG_DIR = BASE_DIR / "log"
+CONFIG_FILE = CFG_DIR / "cfg.json"
+LOG_FILE = LOG_DIR / "log.json"
+TEMPLATE_FILE = CFG_DIR / "post.txt"
 DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 BG = "#0f1012"
@@ -60,8 +63,8 @@ CARD = "#1a1c20"
 CARD_BORDER = "#252830"
 DEFAULT_EMBED_COLOR = "#F54927"
 
-DEFAULT_WAIT_TIME = 3600
-DEFAULT_POST_INTERVAL = 10
+WAIT_TIME = 3600
+POST_INTERVAL = 10
 MONITOR_CHECK_INTERVAL = 5
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -98,35 +101,23 @@ def default_template_text():
 ___"""
 
 
-def normalize_multiline_text(value, default: str) -> str:
-    text = value if isinstance(value, str) else default
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    return text
-
-
-def normalize_int(value, default: int, minimum: int = 0) -> int:
-    try:
-        parsed = int(value)
-    except Exception:
-        return default
-    return max(minimum, parsed)
-
-
 def load_template():
-    return normalize_multiline_text(config.get("post_template", default_template_text()), default_template_text())
+    with file_lock:
+        CFG_DIR.mkdir(parents=True, exist_ok=True)
+        if not TEMPLATE_FILE.exists():
+            default = default_template_text()
+            TEMPLATE_FILE.write_text(default, encoding="utf-8")
+            return default
+        try:
+            return TEMPLATE_FILE.read_text(encoding="utf-8")
+        except Exception:
+            return default_template_text()
 
 
 def save_template(text: str):
-    config["post_template"] = normalize_multiline_text(text, default_template_text())
-    save_config()
-
-
-def get_wait_time_seconds() -> int:
-    return normalize_int(config.get("wait_time_seconds", DEFAULT_WAIT_TIME), DEFAULT_WAIT_TIME, minimum=0)
-
-
-def get_post_interval_seconds() -> int:
-    return normalize_int(config.get("post_interval_seconds", DEFAULT_POST_INTERVAL), DEFAULT_POST_INTERVAL, minimum=0)
+    with file_lock:
+        CFG_DIR.mkdir(parents=True, exist_ok=True)
+        TEMPLATE_FILE.write_text(text, encoding="utf-8")
 
 
 def parse_hex_color(value: str):
@@ -161,7 +152,6 @@ def render_template_text(template: str, filename: str, creation_str: str, upload
 
 
 def normalize_config(raw):
-    raw = raw if isinstance(raw, dict) else {}
     return {
         "folder": raw.get("folder", ""),
         "webhook": raw.get("webhook", ""),
@@ -169,16 +159,11 @@ def normalize_config(raw):
         "delete_after_send": bool(raw.get("delete_after_send", True)),
         "use_embed": bool(raw.get("use_embed", False)),
         "embed_color": normalize_hex_color(raw.get("embed_color", DEFAULT_EMBED_COLOR)),
-        "post_template": normalize_multiline_text(raw.get("post_template", default_template_text()), default_template_text()),
-        "wait_time_seconds": normalize_int(raw.get("wait_time_seconds", DEFAULT_WAIT_TIME), DEFAULT_WAIT_TIME, minimum=0),
-        "post_interval_seconds": normalize_int(raw.get("post_interval_seconds", DEFAULT_POST_INTERVAL), DEFAULT_POST_INTERVAL, minimum=0),
     }
 
 
 config = normalize_config(load_json(CONFIG_FILE, {}))
 sent_history = load_json(LOG_FILE, [])
-if not isinstance(sent_history, list):
-    sent_history = []
 
 
 class UISignals(QObject):
@@ -265,9 +250,6 @@ def create_tray_icon(active: bool, sending: bool = False, rotation: float = 0.0)
 
 
 def save_config():
-    global config
-    config = normalize_config(config)
-    BASE_DIR.mkdir(parents=True, exist_ok=True)
     save_json(CONFIG_FILE, config)
     signals.refresh_fields.emit()
 
@@ -328,46 +310,13 @@ def is_valid_webhook(text: str) -> bool:
     )
 
 
-def clip_embed_description(text: str) -> str:
-    return text if len(text) <= 4096 else text[:4093] + "..."
-
-
-def is_embed_image_file(filename: str) -> bool:
-    return Path(filename).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-
-
-def build_message_payload(message: str, use_embed: bool, embed_color: str, filename: str | None = None):
-    if use_embed:
-        embed = {
-            "description": clip_embed_description(message),
-            "color": discord_color_int(embed_color),
-        }
-        if filename and is_embed_image_file(filename):
-            embed["image"] = {"url": f"attachment://{filename}"}
-        return {"payload_json": json.dumps({"embeds": [embed]}, ensure_ascii=False)}
-    return {"content": message}
-
-
-def build_test_message(template_text: str | None = None) -> str:
-    now_dt = datetime.datetime.now()
-    now_str = f"{DAYS_OF_WEEK[now_dt.weekday()]}, {now_dt.strftime('%d/%m/%y %H:%M:%S')}"
-    template_source = load_template() if template_text is None else template_text
-    template = normalize_multiline_text(template_source, default_template_text())
-    return render_template_text(template, "example.png", now_str, now_str)
-
-
-def send_test_message(template_text: str | None = None, use_embed: bool | None = None):
+def send_test_message():
     webhook = (config.get("webhook") or "").strip()
     if not webhook:
         return False, "Preencha um webhook antes de testar."
 
-    message = build_test_message(template_text)
-    use_embed = bool(config.get("use_embed", False)) if use_embed is None else bool(use_embed)
-    embed_color = normalize_hex_color(config.get("embed_color", DEFAULT_EMBED_COLOR))
-    payload = build_message_payload(message, use_embed, embed_color)
-
     try:
-        res = requests.post(webhook, data=payload, timeout=12)
+        res = requests.post(webhook, data={"content": "Texto de teste."}, timeout=12)
         if res.status_code in (200, 204):
             return True, "Teste enviado com sucesso."
         if res.status_code == 404:
@@ -433,13 +382,29 @@ def send_file(path):
                 with open(path, "rb") as f:
                     sending_event.set()
                     try:
-                        payload = build_message_payload(message, use_embed, embed_color, filename=filename)
-                        res = requests.post(
-                            webhook,
-                            data=payload,
-                            files={"file": (filename, f)},
-                            timeout=15,
-                        )
+                        if use_embed:
+                            embed_description = message if len(message) <= 4096 else message[:4093] + "..."
+                            payload = {
+                                "embeds": [
+                                    {
+                                        "description": embed_description,
+                                        "color": discord_color_int(embed_color),
+                                    }
+                                ]
+                            }
+                            res = requests.post(
+                                webhook,
+                                data={"payload_json": json.dumps(payload, ensure_ascii=False)},
+                                files={"file": (filename, f)},
+                                timeout=15,
+                            )
+                        else:
+                            res = requests.post(
+                                webhook,
+                                data={"content": message},
+                                files={"file": (filename, f)},
+                                timeout=15,
+                            )
                     finally:
                         sending_event.clear()
 
@@ -487,7 +452,7 @@ def send_now_manual():
             if send_file(file):
                 sent_any = True
                 signals.toast.emit("success", f"Enviado: {os.path.basename(file)}")
-                for _ in range(get_post_interval_seconds()):
+                for _ in range(POST_INTERVAL):
                     if stop_event.is_set():
                         break
                     time.sleep(1)
@@ -514,13 +479,13 @@ def monitoring_loop():
                         for f in os.listdir(folder)
                         if os.path.isfile(os.path.join(folder, f))
                     ]
-                    ready = [p for p in files if now - os.path.getctime(p) >= get_wait_time_seconds()]
+                    ready = [p for p in files if now - os.path.getctime(p) >= WAIT_TIME]
                     for file in sorted(ready, key=os.path.getctime):
                         if stop_event.is_set() or not monitoring:
                             break
                         if send_file(file):
                             signals.toast.emit("success", f"Enviado automaticamente: {os.path.basename(file)}")
-                            for _ in range(get_post_interval_seconds()):
+                            for _ in range(POST_INTERVAL):
                                 if stop_event.is_set() or not monitoring:
                                     break
                                 time.sleep(1)
@@ -1228,79 +1193,21 @@ class FolderPage(PageBase):
         self.window.go_home()
 
 
-class EmbedPreviewCard(QFrame):
-    def __init__(self):
-        super().__init__()
-        self.setStyleSheet(
-            f"""
-            QFrame {{
-                background: #2b2d31;
-                border: 1px solid #23262d;
-                border-radius: 16px;
-            }}
-            QLabel {{
-                background: transparent;
-                border: none;
-            }}
-            """
-        )
-        root = QHBoxLayout(self)
-        root.setContentsMargins(0, 12, 12, 12)
-        root.setSpacing(12)
-
-        self.color_bar = QFrame()
-        self.color_bar.setFixedWidth(4)
-        self.color_bar.setStyleSheet(f"background:{DEFAULT_EMBED_COLOR}; border-radius:2px;")
-        root.addWidget(self.color_bar)
-
-        content = QVBoxLayout()
-        content.setContentsMargins(0, 0, 0, 0)
-        content.setSpacing(4)
-
-        self.title = QLabel("Preview do embed")
-        self.title.setStyleSheet("color:#ffffff; font: 700 10px 'Segoe UI';")
-        content.addWidget(self.title)
-
-        self.subtitle = QLabel("Cor lateral e texto do post no estilo embed do Discord.")
-        self.subtitle.setWordWrap(True)
-        self.subtitle.setStyleSheet("color:#b5bac1; font: 500 9px 'Segoe UI';")
-        content.addWidget(self.subtitle)
-
-        self.text_label = QLabel("")
-        self.text_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.text_label.setWordWrap(True)
-        self.text_label.setStyleSheet("color:#dbdee1; font: 500 10px 'Segoe UI';")
-        content.addWidget(self.text_label)
-
-        root.addLayout(content, 1)
-
-    def set_preview(self, text: str, hex_color: str, use_embed: bool):
-        safe_text = text.strip() or "(Post vazio)"
-        self.color_bar.setStyleSheet(f"background:{normalize_hex_color(hex_color)}; border-radius:2px;")
-        self.title.setText("Preview do embed" if use_embed else "Preview do embed (modo padrão desligado)")
-        self.text_label.setText(safe_text)
-
-
 class PostTemplatePage(PageBase):
     def __init__(self, window):
         super().__init__("Personalizar post", "Edite o conteúdo bruto que será enviado junto com o arquivo no Discord.")
         self.window = window
-        self._loading = False
         self.body.addSpacing(6)
 
         self.editor = QTextEdit()
         self.editor.setPlaceholderText("Digite aqui o conteúdo do post...")
         self.editor.setStyleSheet(self.window.text_edit_style())
-        self.editor.textChanged.connect(self.on_editor_text_changed)
         self.body.addWidget(self.editor, 1)
 
         self.help_label = QLabel("Variáveis: {filename}  •  {creation_str}  •  {upload_str}")
         self.help_label.setWordWrap(True)
         self.help_label.setStyleSheet(f"color:{MUTED}; font: 500 9px 'Segoe UI';")
         self.body.addWidget(self.help_label)
-
-        self.preview_card = EmbedPreviewCard()
-        self.body.addWidget(self.preview_card)
 
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
@@ -1330,7 +1237,6 @@ class PostTemplatePage(PageBase):
         self.body.addLayout(buttons)
 
     def refresh(self):
-        self._loading = True
         self.editor.setPlainText(load_template())
         self.embed_toggle.setChecked(bool(config.get("use_embed", False)))
         self.color_btn.set_color(config.get("embed_color", DEFAULT_EMBED_COLOR))
@@ -1339,26 +1245,14 @@ class PostTemplatePage(PageBase):
         has_webhook = bool((config.get("webhook") or "").strip())
         self.test_btn.setEnabled(has_webhook)
         self.test_btn.setStyleSheet(self.window.small_button_style(enabled=has_webhook, accent=BLUE))
-        self.update_preview()
-        self._loading = False
         self.editor.setFocus()
         cursor = self.editor.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         self.editor.setTextCursor(cursor)
 
-    def update_preview(self):
-        preview_text = build_test_message(self.editor.toPlainText())
-        self.preview_card.set_preview(preview_text, config.get("embed_color", DEFAULT_EMBED_COLOR), self.embed_toggle.isChecked())
-
-    def on_editor_text_changed(self):
-        if self._loading:
-            return
-        self.update_preview()
-
     def toggle_embed(self):
         config["use_embed"] = self.embed_toggle.isChecked()
         save_config()
-        self.update_preview()
 
     def ensure_color_popup(self):
         if self.color_popup is None:
@@ -1377,24 +1271,22 @@ class PostTemplatePage(PageBase):
 
     def on_embed_color_live_changed(self, hex_color):
         self.color_btn.set_color(hex_color)
-        self.preview_card.set_preview(build_test_message(self.editor.toPlainText()), hex_color, self.embed_toggle.isChecked())
 
     def on_embed_color_saved(self, hex_color):
         normalized = normalize_hex_color(hex_color)
         config["embed_color"] = normalized
         save_config()
         self.color_btn.set_color(normalized)
-        self.update_preview()
 
     def test_webhook(self):
-        ok, msg = send_test_message(self.editor.toPlainText(), self.embed_toggle.isChecked())
+        ok, msg = send_test_message()
         self.window.show_message("success" if ok else "error", msg)
 
     def save_template(self, show_feedback=False):
         text = self.editor.toPlainText().replace("\r\n", "\n")
         save_template(text)
         if show_feedback:
-            self.window.show_message("success", "Post salvo no cfg.json.")
+            self.window.show_message("success", "post.txt salvo automaticamente.")
 
     def back_to_settings(self):
         self.save_template(show_feedback=True)
@@ -1477,7 +1369,7 @@ class SettingsPage(PageBase):
         post_layout.setContentsMargins(0, 0, 0, 0)
         self.post_btn = self.window.make_small_button("Editar post", self.window.open_post_template_page)
         post_layout.addWidget(self.post_btn)
-        self.scroll_body.addWidget(SettingRow("Personalizar post", "Abre uma página para editar o texto do post, preview do embed e salvar tudo no cfg.json.", post_wrap))
+        self.scroll_body.addWidget(SettingRow("Personalizar post", "Abre uma página para editar o texto do post e salvar no arquivo post.txt.", post_wrap))
 
         clear_wrap = QWidget()
         clear_wrap.setStyleSheet("background: transparent;")
@@ -1950,7 +1842,8 @@ def ensure_first_run(window: MainWindow):
 
 
 if __name__ == "__main__":
-    BASE_DIR.mkdir(parents=True, exist_ok=True)
+    CFG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
     save_config()
 
     app = QApplication(sys.argv)
