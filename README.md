@@ -74,6 +74,36 @@ Run the current version:
 python main.py
 ```
 
+## Build an Executable File
+
+To create an executable file for this Python project, follow these steps:
+
+1. Install `pyinstaller`:
+
+    ```bash
+    pip install pyinstaller
+    ```
+
+2. Generate the executable:
+
+    ```bash
+    pyinstaller --onefile --windowed main.py
+    ```
+
+    This command will create a standalone executable in the `dist` directory. The `--onefile` option ensures that all dependencies are bundled into a single file, while the `--windowed` flag prevents a terminal window from opening when running the executable.
+
+3. Locate the executable:
+
+    After the build is complete, you can find the `.exe` file in the `dist` folder.
+
+4. [Optional] Customize the executable name:
+
+    You can specify the output name of the executable using the `--name` option:
+
+    ```bash
+    pyinstaller --onefile --windowed --name "DiscordUploader" main.py
+    ```
+
 ## Version History
 
 The project history is tracked through:
