@@ -1,15 +1,14 @@
 # Discord Webhook Uploader
 
-This repository allows you to upload files to Discord via webhooks. Make sure to configure your webhook properly before using it.
+This project allows you to upload files to Discord using webhooks.
+
+## Installation
+1. Clone the repository using `git clone https://github.com/andersomviolao/discord-webhook-uploader`
+2. Install the required dependencies.
 
 ## Usage
+1. Set up your Discord webhook.
+2. Run the uploader script.
 
-1. Install the required dependencies.
-2. Configure your settings.
-3. Run the uploader to send your files.
-
-## Important
-
-- Always secure your webhook URLs.
-- Don't expose your sensitive data in the repository.
-- Review older versions for sensitive data before making the repository public.
+## Contributing
+Please feel free to submit issues or pull requests for improvements!
