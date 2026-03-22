@@ -40,7 +40,7 @@ except Exception:
 
 APP_NAME = "Discord Webhook Uploader"
 APP_DIR_NAME = "discord-webhook-uploader"
-APP_VERSION = "3.0.4"
+APP_VERSION = "3.0.5"
 WINDOW_WIDTH = 560
 WINDOW_HEIGHT = 320
 BASE_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / APP_DIR_NAME
@@ -2224,7 +2224,7 @@ class TrayController(QObject):
         self.hide_interface_to_tray()
 
     def on_tray_activated(self, reason):
-        debug_log("tray_activated", reason=int(reason))
+        debug_log("tray_activated", reason=reason)
         if reason == QSystemTrayIcon.Context:
             self.exit_bubble.show_near_cursor()
             return
