@@ -12,6 +12,11 @@ import datetime
 import traceback
 from pathlib import Path
 
+try:
+    import ctypes
+except Exception:
+    ctypes = None
+
 from send2trash import send2trash
 from PySide6.QtCore import Qt, Signal, QObject, QEasingCurve, QPropertyAnimation, QTimer, QRect, QSize
 from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QBrush, QLinearGradient
@@ -40,7 +45,7 @@ except Exception:
 
 APP_NAME = "Discord Webhook Uploader"
 APP_DIR_NAME = "discord-webhook-uploader"
-APP_VERSION = "3.0.5"
+APP_VERSION = "3.0.6"
 WINDOW_WIDTH = 560
 WINDOW_HEIGHT = 320
 BASE_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / APP_DIR_NAME
@@ -116,6 +121,49 @@ def _safe_debug_value(value):
         return _debug_enum_value(value)
     return str(value)
 
+
+
+
+def set_window_pos_safely(widget, *, x=None, y=None, width=None, height=None, move=True, resize=True):
+    if not move and not resize:
+        return
+
+    if x is None:
+        x = widget.x()
+    if y is None:
+        y = widget.y()
+    if width is None:
+        width = widget.width()
+    if height is None:
+        height = widget.height()
+
+    if sys.platform.startswith("win") and ctypes is not None:
+        try:
+            hwnd = int(widget.winId())
+            flags = 0x0004 | 0x0010
+            if not move:
+                flags |= 0x0002
+            if not resize:
+                flags |= 0x0001
+            ctypes.windll.user32.SetWindowPos(hwnd, 0, int(x), int(y), int(width), int(height), flags)
+            return
+        except Exception as exc:
+            debug_log("set_window_pos_safely_fallback", error=str(exc), move=move, resize=resize, x=x, y=y, width=width, height=height)
+
+    if move and resize:
+        widget.setGeometry(int(x), int(y), int(width), int(height))
+    elif move:
+        widget.move(int(x), int(y))
+    elif resize:
+        widget.resize(int(width), int(height))
+
+
+def enforce_fixed_window_size(widget, *, width=WINDOW_WIDTH, height=WINDOW_HEIGHT):
+    widget.setMinimumSize(width, height)
+    widget.setMaximumSize(width, height)
+    widget.setBaseSize(width, height)
+    if widget.width() != width or widget.height() != height:
+        set_window_pos_safely(widget, width=width, height=height, move=False, resize=True)
 
 def debug_enabled() -> bool:
     return bool(globals().get("config", {}).get("debug_mode", False))
@@ -1658,9 +1706,12 @@ class MainWindow(QWidget):
         self._geometry_fix_pending = False
         self._enforcing_geometry = False
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint | Qt.MSWindowsFixedSizeDialogHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFixedSize(WINDOW_WIDTH, WINDOW_HEIGHT)
+        self.setMinimumSize(WINDOW_WIDTH, WINDOW_HEIGHT)
+        self.setMaximumSize(WINDOW_WIDTH, WINDOW_HEIGHT)
+        self.setBaseSize(WINDOW_WIDTH, WINDOW_HEIGHT)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         outer = QVBoxLayout(self)
@@ -1674,7 +1725,7 @@ class MainWindow(QWidget):
         root.setSpacing(10)
 
         self.stack = CompactStackedWidget()
-        self.stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
+        self.stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root.addWidget(self.stack, 1)
 
         self.message_label = QLabel("")
@@ -1691,7 +1742,7 @@ class MainWindow(QWidget):
 
         for page in [self.home_page, self.webhook_page, self.folder_page, self.settings_page, self.post_template_page]:
             page.setMinimumSize(0, 0)
-            page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
+            page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self.stack.addWidget(page)
 
         debug_log("main_window_initialized", width=WINDOW_WIDTH, height=WINDOW_HEIGHT)
@@ -1954,10 +2005,7 @@ class MainWindow(QWidget):
         try:
             if self.windowState() != Qt.WindowNoState:
                 self.setWindowState(Qt.WindowNoState)
-            if self.minimumWidth() != WINDOW_WIDTH or self.minimumHeight() != WINDOW_HEIGHT:
-                self.setFixedSize(WINDOW_WIDTH, WINDOW_HEIGHT)
-            if self.width() != WINDOW_WIDTH or self.height() != WINDOW_HEIGHT:
-                self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
+            enforce_fixed_window_size(self, width=WINDOW_WIDTH, height=WINDOW_HEIGHT)
         finally:
             self._enforcing_geometry = False
             debug_log("ensure_expected_geometry_finished", width=self.width(), height=self.height())
@@ -1994,12 +2042,12 @@ class MainWindow(QWidget):
         screen = QApplication.primaryScreen().availableGeometry()
         x = screen.right() - WINDOW_WIDTH - 20
         y = screen.bottom() - WINDOW_HEIGHT - 50
-        self.move(x, y)
+        set_window_pos_safely(self, x=x, y=y, move=True, resize=False)
         debug_log("show_near_tray_positioned", x=x, y=y)
         self.show()
         self.raise_()
         self.activateWindow()
-        self.schedule_geometry_fix()
+        self.ensure_expected_geometry()
 
     def exit_app(self):
         debug_log("exit_app_requested")
@@ -2021,7 +2069,7 @@ class MainWindow(QWidget):
     def mouseMoveEvent(self, event):
         if self.drag_pos is not None and event.buttons() & Qt.LeftButton:
             target = event.globalPosition().toPoint() - self.drag_pos
-            self.setGeometry(target.x(), target.y(), WINDOW_WIDTH, WINDOW_HEIGHT)
+            set_window_pos_safely(self, x=target.x(), y=target.y(), move=True, resize=False)
             debug_log("window_drag_moved", target_x=target.x(), target_y=target.y(), width=self.width(), height=self.height())
         super().mouseMoveEvent(event)
 
@@ -2029,7 +2077,7 @@ class MainWindow(QWidget):
         debug_log("window_drag_released", width=self.width(), height=self.height())
         self.drag_pos = None
         self.is_dragging = False
-        self.schedule_geometry_fix()
+        self.ensure_expected_geometry()
         super().mouseReleaseEvent(event)
 
     def resizeEvent(self, event):
@@ -2038,13 +2086,14 @@ class MainWindow(QWidget):
         if self._enforcing_geometry:
             return
         if event.size().width() != WINDOW_WIDTH or event.size().height() != WINDOW_HEIGHT:
-            self.schedule_geometry_fix()
+            debug_log("unexpected_main_window_resize_detected", actual_width=event.size().width(), actual_height=event.size().height())
+            self.ensure_expected_geometry()
 
     def changeEvent(self, event):
         debug_log("main_window_change_event", event_type=event.type(), window_state=self.windowState())
         super().changeEvent(event)
         if event.type() == event.Type.WindowStateChange and self.windowState() != Qt.WindowNoState:
-            self.schedule_geometry_fix()
+            self.ensure_expected_geometry()
 
     def showEvent(self, event):
         debug_log("main_window_show_event")
